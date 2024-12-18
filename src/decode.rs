@@ -25,6 +25,7 @@
 
 use std::io;
 use std::io::Read;
+use streamvbyte64::{Coder, Coder0124};
 
 /// Decode a verbatim representation of bsdiff output.
 #[allow(clippy::ptr_arg)]
@@ -47,4 +48,73 @@ pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
             return Err(UnexpectedEof.into());
         }
     }
+}
+
+#[allow(unused)]
+fn patch<T: Read>(old: &[u8], patch: &mut T, new: &mut Vec<u8>) -> io::Result<()> {
+    let mut buf = [0; 16];
+    patch.read_exact(&mut buf)?;
+
+    let mut num_copies = u32::from_le_bytes(buf[0..][..4].try_into().unwrap()) as usize;
+    let num_edits = u32::from_le_bytes(buf[4..][..4].try_into().unwrap()) as usize;
+    let len_copies = u32::from_le_bytes(buf[8..][..4].try_into().unwrap()) as usize;
+    let len_edits = u32::from_le_bytes(buf[12..][..4].try_into().unwrap()) as usize;
+
+    let mut copy_tags = vec![0; (num_copies + 3) >> 2];
+    patch.read_exact(&mut copy_tags)?;
+    let mut edit_tags = vec![0; (num_edits + 3) >> 2];
+    patch.read_exact(&mut edit_tags)?;
+
+    let mut copy_data = vec![0; len_copies];
+    patch.read_exact(&mut copy_tags)?;
+    let mut copy_data = copy_data.as_slice();
+
+    let mut edit_data = vec![0; len_edits];
+    patch.read_exact(&mut edit_tags)?;
+    let mut edit_data = edit_data.as_slice();
+
+    let mut deltas = vec![0; num_edits];
+    patch.read_exact(&mut deltas)?;
+    let mut deltas = deltas.as_slice();
+
+    // Literals follow
+
+    let coder = Coder0124::new();
+
+    let mut cursor = 0;
+    let mut copies = [0u32; 12];
+    for tags in copy_tags.chunks(3) {
+        let read = coder.decode(tags, copy_data, &mut copies);
+        copy_data = &copy_data[read..];
+        for p in copies[..num_copies.min(12)].chunks_exact(3) {
+            let mix = p[0] as usize;
+            new.extend(&old[cursor..][..mix]);
+            let lit = p[1] as usize;
+            if lit != patch.take(lit as u64).read_to_end(new)? {
+                return Err(io::ErrorKind::UnexpectedEof.into());
+            }
+            cursor += mix;
+            let seek = p[2];
+            if seek & 1 != 0 {
+                cursor -= (seek >> 1) as usize + 1;
+            } else {
+                cursor += (seek >> 1) as usize;
+            }
+            num_copies -= 3;
+        }
+    }
+
+    cursor = 0;
+    let mut edits = [0u32; 4];
+    for tag in edit_tags.as_slice() {
+        let read = coder.decode(std::slice::from_ref(tag), edit_data, &mut edits);
+        edit_data = &edit_data[read..];
+        for (&edit, &delta) in edits.iter().zip(deltas) {
+            cursor += edit as usize;
+            new[cursor] = new[cursor].wrapping_add(delta);
+            cursor += 1;
+        }
+        deltas = &deltas[deltas.len().min(4)..];
+    }
+    Ok(())
 }
