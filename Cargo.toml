@@ -1,0 +1,15 @@
+[package]
+name = "aehobak"
+version = "0.0.1"
+authors = ["David Michael Barr <b@rr-dav.id.au>"]
+description = "Transcoder for bsdiff binary patches."
+readme = "README.md"
+categories = ["compression"]
+keywords = ["bsdiff", "patch", "diff", "delta", "binary"]
+license = "BSD-2-Clause"
+homepage = "https://lib.rs/aehobak"
+repository = "https://github.com/barrbrain/aehobak"
+edition = "2021"
+include = ["src/*.rs", "LICENSE", "README.md", "Cargo.toml"]
+
+[dependencies]
