@@ -26,25 +26,35 @@
 use std::io;
 use std::io::Read;
 
-/// Decode a verbatim representation of bsdiff output.
+/// Decode a segmented representation of bsdiff output.
 #[allow(clippy::ptr_arg)]
 pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
-    use io::ErrorKind::{InvalidData, UnexpectedEof};
-    let mut buffer = [0; 24];
-    loop {
-        // Stop when EOF reached at start of frame.
-        match reader.read(&mut buffer)? {
-            0 => return Ok(()),
-            n => reader.read_exact(&mut buffer[n..])?,
-        }
-        patch.extend(&buffer);
+    let mut prefix = [0u8; 24];
+    reader.read_exact(&mut prefix)?;
 
-        let mix = u64::from_le_bytes(buffer[..8].try_into().unwrap());
-        let copy = u64::from_le_bytes(buffer[8..16].try_into().unwrap());
-        let len = copy.checked_add(mix).ok_or(io::Error::from(InvalidData))?;
+    let headers_len = u64::from_le_bytes(prefix[..8].try_into().unwrap()) as usize;
+    let literals_len = u64::from_le_bytes(prefix[8..16].try_into().unwrap()) as usize;
+    let deltas_len = u64::from_le_bytes(prefix[16..].try_into().unwrap()) as usize;
 
-        if len != reader.take(len).read_to_end(patch)? as u64 {
-            return Err(UnexpectedEof.into());
-        }
+    let mut headers = vec![0; headers_len];
+    let mut literals = vec![0; literals_len];
+    let mut deltas = vec![0; deltas_len];
+
+    reader.read_exact(&mut headers)?;
+    reader.read_exact(&mut literals)?;
+    reader.read_exact(&mut deltas)?;
+
+    let mut literals = literals.as_slice();
+    let mut deltas = deltas.as_slice();
+
+    for buffer in headers.chunks_exact(24) {
+        let mix = u64::from_le_bytes(buffer[..8].try_into().unwrap()) as usize;
+        let copy = u64::from_le_bytes(buffer[8..16].try_into().unwrap()) as usize;
+        patch.extend(buffer);
+        patch.extend(&deltas[..mix]);
+        patch.extend(&literals[..copy]);
+        deltas = &deltas[mix..];
+        literals = &literals[copy..];
     }
+    Ok(())
 }

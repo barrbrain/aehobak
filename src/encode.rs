@@ -26,22 +26,37 @@
 use std::io;
 use std::io::Write;
 
-/// Encode bsdiff output, returning a verbatim representation.
+/// Encode bsdiff output, returning a segmented representation.
 pub fn encode<T: Write>(patch: &[u8], writer: &mut T) -> io::Result<()> {
     encode_internal(patch, writer)
 }
 
 fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
+    let mut headers = Vec::<u8>::new();
+    let mut deltas = Vec::<u8>::new();
+    let mut literals = Vec::<u8>::new();
+
     while 24 <= patch.len() {
         let mix = u64::from_le_bytes(patch[..8].try_into().unwrap());
         let copy = u64::from_le_bytes(patch[8..16].try_into().unwrap());
-        writer.write_all(&patch[..24])?;
+        headers.extend(&patch[..24]);
         patch = &patch[24..];
         let (mix, copy) = (mix as usize, copy as usize);
-        writer.write_all(&patch[..mix])?;
+        deltas.extend(&patch[..mix]);
         patch = &patch[mix..];
-        writer.write_all(&patch[..copy])?;
+        literals.extend(&patch[..copy]);
         patch = &patch[copy..];
     }
+
+    let mut prefix = [0u8; 24];
+    prefix[..8].copy_from_slice(&(headers.len() as u64).to_le_bytes());
+    prefix[8..16].copy_from_slice(&(literals.len() as u64).to_le_bytes());
+    prefix[16..].copy_from_slice(&(deltas.len() as u64).to_le_bytes());
+
+    writer.write_all(&prefix)?;
+    writer.write_all(&headers)?;
+    writer.write_all(&literals)?;
+    writer.write_all(&deltas)?;
+
     Ok(())
 }
