@@ -13,3 +13,7 @@ edition = "2021"
 include = ["src/*.rs", "LICENSE", "README.md", "Cargo.toml"]
 
 [dependencies]
+
+[dev-dependencies]
+bsdiff = "0.2.0"
+quickcheck = "1.0.3"

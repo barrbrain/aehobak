@@ -30,3 +30,22 @@ mod encode;
 
 pub use decode::decode;
 pub use encode::encode;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bsdiff;
+    use quickcheck::quickcheck;
+
+    quickcheck! {
+        fn round_trip(old: Vec<u8>, new: Vec<u8>) -> bool {
+            let mut patch = Vec::new();
+            let mut encoded = Vec::new();
+            let mut decoded = Vec::new();
+            bsdiff::diff(&old, &new, &mut patch).unwrap();
+            encode(&patch, &mut encoded).unwrap();
+            decode(&mut encoded.as_slice(), &mut decoded).unwrap();
+            decoded == patch
+        }
+    }
+}
