@@ -31,7 +31,17 @@ pub fn encode<T: Write>(patch: &[u8], writer: &mut T) -> io::Result<()> {
     encode_internal(patch, writer)
 }
 
-fn encode_internal(patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
-    writer.write_all(patch)?;
+fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
+    while 24 <= patch.len() {
+        let mix = u64::from_le_bytes(patch[..8].try_into().unwrap());
+        let copy = u64::from_le_bytes(patch[8..16].try_into().unwrap());
+        writer.write_all(&patch[..24])?;
+        patch = &patch[24..];
+        let (mix, copy) = (mix as usize, copy as usize);
+        writer.write_all(&patch[..mix])?;
+        patch = &patch[mix..];
+        writer.write_all(&patch[..copy])?;
+        patch = &patch[copy..];
+    }
     Ok(())
 }
