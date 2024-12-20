@@ -27,31 +27,36 @@ use crate::control::Aehobak as AehobakControl;
 use crate::control::Bsdiff as BsdiffControl;
 use std::io;
 use std::io::Read;
+use streamvbyte64::{Coder, Coder0124};
 
 /// Decode a reduced representation of bsdiff output.
 #[allow(clippy::ptr_arg)]
 pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
-    let mut prefix = [0u8; 12];
+    let mut prefix = [0u8; 16];
     reader.read_exact(&mut prefix)?;
 
     let headers_len = u32::from_le_bytes(prefix[..4].try_into().unwrap()) as usize;
     let literals_len = u32::from_le_bytes(prefix[4..8].try_into().unwrap()) as usize;
-    let deltas_len = u32::from_le_bytes(prefix[8..].try_into().unwrap()) as usize;
+    let deltas_len = u32::from_le_bytes(prefix[8..12].try_into().unwrap()) as usize;
+    let delta_data_len = u32::from_le_bytes(prefix[12..].try_into().unwrap()) as usize;
+    let delta_tags_len = (deltas_len + 3) / 4;
 
     let mut headers = vec![0; headers_len];
     let mut literals = vec![0; literals_len];
-    let mut delta_skips = vec![0; 4 * deltas_len];
     let mut delta_diffs = vec![0; deltas_len];
+    let mut delta_tags = vec![0; delta_tags_len];
+    let mut delta_data = vec![0; delta_data_len];
 
+    reader.read_exact(&mut delta_tags)?;
     reader.read_exact(&mut headers)?;
     reader.read_exact(&mut literals)?;
-    reader.read_exact(&mut delta_skips)?;
+    reader.read_exact(&mut delta_data)?;
     reader.read_exact(&mut delta_diffs)?;
 
-    let delta_skips = delta_skips
-        .chunks_exact(4)
-        .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
-        .collect::<Vec<u32>>();
+    let mut delta_skips = vec![0; 4 * delta_tags_len];
+    let coder = Coder0124::new();
+    let _ = coder.decode(&delta_tags, &delta_data, &mut delta_skips);
+    delta_skips.truncate(deltas_len);
 
     let mut literals = literals.as_slice();
     let mut delta_skips = delta_skips.as_slice();

@@ -27,6 +27,7 @@ use crate::control::Aehobak as AehobakControl;
 use crate::control::Bsdiff as BsdiffControl;
 use std::io;
 use std::io::Write;
+use streamvbyte64::{Coder, Coder0124};
 
 /// Encode bsdiff output, returning a reduced representation.
 pub fn encode<T: Write>(patch: &[u8], writer: &mut T) -> io::Result<()> {
@@ -63,17 +64,27 @@ fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
         patch = &patch[copy..];
     }
 
-    let mut prefix = [0u8; 12];
+    let coder = Coder0124::new();
+    let padding = delta_skips.len().wrapping_neg() % 4;
+    delta_skips.resize(delta_skips.len() + padding, 0);
+
+    let (tag_len, data_len) = Coder0124::max_compressed_bytes(delta_skips.len());
+    let mut delta_encoded = vec![0u8; tag_len + data_len];
+    let (delta_tags, delta_data) = delta_encoded.split_at_mut(tag_len);
+    let delta_data_len = coder.encode(&delta_skips, delta_tags, delta_data);
+    let delta_data = &delta_data[..delta_data_len];
+
+    let mut prefix = [0u8; 16];
     prefix[..4].copy_from_slice(&(headers.len() as u32).to_le_bytes());
     prefix[4..8].copy_from_slice(&(literals.len() as u32).to_le_bytes());
-    prefix[8..].copy_from_slice(&(delta_diffs.len() as u32).to_le_bytes());
+    prefix[8..12].copy_from_slice(&(delta_diffs.len() as u32).to_le_bytes());
+    prefix[12..].copy_from_slice(&(delta_data_len as u32).to_le_bytes());
 
     writer.write_all(&prefix)?;
+    writer.write_all(delta_tags)?;
     writer.write_all(&headers)?;
     writer.write_all(&literals)?;
-    for skip in delta_skips {
-        writer.write_all(&skip.to_le_bytes())?;
-    }
+    writer.write_all(delta_data)?;
     writer.write_all(&delta_diffs)?;
 
     Ok(())
