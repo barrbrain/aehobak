@@ -32,29 +32,39 @@ use streamvbyte64::{Coder, Coder0124};
 /// Decode a reduced representation of bsdiff output.
 #[allow(clippy::ptr_arg)]
 pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
-    let mut prefix = [0u8; 16];
+    let mut prefix = [0u8; 20];
     reader.read_exact(&mut prefix)?;
 
     let headers_len = u32::from_le_bytes(prefix[..4].try_into().unwrap()) as usize;
-    let literals_len = u32::from_le_bytes(prefix[4..8].try_into().unwrap()) as usize;
-    let deltas_len = u32::from_le_bytes(prefix[8..12].try_into().unwrap()) as usize;
-    let delta_data_len = u32::from_le_bytes(prefix[12..].try_into().unwrap()) as usize;
+    let header_data_len = u32::from_le_bytes(prefix[4..8].try_into().unwrap()) as usize;
+    let literals_len = u32::from_le_bytes(prefix[8..12].try_into().unwrap()) as usize;
+    let deltas_len = u32::from_le_bytes(prefix[12..16].try_into().unwrap()) as usize;
+    let delta_data_len = u32::from_le_bytes(prefix[16..].try_into().unwrap()) as usize;
+
+    let header_tags_len = (headers_len + 3) / 4;
     let delta_tags_len = (deltas_len + 3) / 4;
 
-    let mut headers = vec![0; headers_len];
+    let mut header_tags = vec![0; header_tags_len];
+    let mut header_data = vec![0; header_data_len];
     let mut literals = vec![0; literals_len];
     let mut delta_diffs = vec![0; deltas_len];
     let mut delta_tags = vec![0; delta_tags_len];
     let mut delta_data = vec![0; delta_data_len];
 
+    reader.read_exact(&mut header_tags)?;
     reader.read_exact(&mut delta_tags)?;
-    reader.read_exact(&mut headers)?;
+    reader.read_exact(&mut header_data)?;
     reader.read_exact(&mut literals)?;
     reader.read_exact(&mut delta_data)?;
     reader.read_exact(&mut delta_diffs)?;
 
-    let mut delta_skips = vec![0; 4 * delta_tags_len];
     let coder = Coder0124::new();
+
+    let mut headers = vec![0; 4 * header_tags_len];
+    let _ = coder.decode(&header_tags, &header_data, &mut headers);
+    headers.truncate(headers_len);
+
+    let mut delta_skips = vec![0; 4 * delta_tags_len];
     let _ = coder.decode(&delta_tags, &delta_data, &mut delta_skips);
     delta_skips.truncate(deltas_len);
 
@@ -66,7 +76,7 @@ pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
     let mut delta_cursor = 0;
     let mut stream_cursor = 0;
 
-    for buffer in headers.chunks_exact(12) {
+    for buffer in headers.chunks_exact(3) {
         let control: BsdiffControl = (&AehobakControl::try_from(buffer).unwrap()).into();
         let (add, copy) = (control.add as usize, control.copy as usize);
         control.encode(patch);

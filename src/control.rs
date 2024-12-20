@@ -94,30 +94,28 @@ impl TryFrom<Bsdiff> for Aehobak {
     }
 }
 
-impl TryFrom<&[u8]> for Aehobak {
+impl TryFrom<&[u32]> for Aehobak {
     type Error = std::array::TryFromSliceError;
 
-    fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
-        let _: &[u8; 12] = buf.try_into()?;
+    fn try_from(vbytes: &[u32]) -> Result<Self, Self::Error> {
+        let _: &[u32; 3] = vbytes.try_into()?;
         fn to_i32(x: u32) -> i32 {
             (x >> 1) as i32 ^ ((x as i32 & 1) << 31 >> 31)
         }
         Ok(Self {
-            add: u32::from_le_bytes(buf[0..4].try_into().unwrap()),
-            copy: u32::from_le_bytes(buf[4..8].try_into().unwrap()),
-            seek: to_i32(u32::from_le_bytes(buf[8..12].try_into().unwrap())),
+            add: vbytes[0],
+            copy: vbytes[1],
+            seek: to_i32(vbytes[2]),
         })
     }
 }
 
 impl Aehobak {
-    pub fn encode(&self, patch: &mut Vec<u8>) {
+    pub fn encode(&self, vbytes: &mut Vec<u32>) {
         fn to_u32(x: i32) -> u32 {
             ((x >> 31) ^ (x << 1)) as u32
         }
-        patch.extend(&self.add.to_le_bytes());
-        patch.extend(&self.copy.to_le_bytes());
-        patch.extend(&to_u32(self.seek).to_le_bytes());
+        vbytes.extend([self.add, self.copy, to_u32(self.seek)]);
     }
 }
 
@@ -173,15 +171,15 @@ mod tests {
 
     #[test]
     fn aehobak_vectors() {
-        let mut patch = vec![0; 12];
+        let mut patch = vec![0; 3];
         for (v, (add, copy, seek)) in [
             ((0, 0, 0), (0, 0, 0)),
             ((1, 1, 2), (1, 1, 1)),
             ((0, 0, 1), (0, 0, -1)),
         ] {
             patch[0] = v.0;
-            patch[4] = v.1;
-            patch[8] = v.2;
+            patch[1] = v.1;
+            patch[2] = v.2;
 
             let decoded: Aehobak = patch.as_slice().try_into().unwrap();
             let reference = Aehobak { add, copy, seek };

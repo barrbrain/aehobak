@@ -35,7 +35,7 @@ pub fn encode<T: Write>(patch: &[u8], writer: &mut T) -> io::Result<()> {
 }
 
 fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
-    let mut headers = Vec::<u8>::new();
+    let mut headers = Vec::<u32>::new();
     let mut delta_skips = Vec::<u32>::new();
     let mut delta_diffs = Vec::<u8>::new();
     let mut literals = Vec::<u8>::new();
@@ -65,24 +65,35 @@ fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
     }
 
     let coder = Coder0124::new();
+
+    let headers_len = headers.len();
+    let padding = headers_len.wrapping_neg() % 4;
+    headers.resize(headers_len + padding, 0);
+    let (tag_len, data_len) = Coder0124::max_compressed_bytes(headers.len());
+    let mut headers_encoded = vec![0u8; tag_len + data_len];
+    let (header_tags, header_data) = headers_encoded.split_at_mut(tag_len);
+    let header_data_len = coder.encode(&headers, header_tags, header_data);
+    let header_data = &header_data[..header_data_len];
+
     let padding = delta_skips.len().wrapping_neg() % 4;
     delta_skips.resize(delta_skips.len() + padding, 0);
-
     let (tag_len, data_len) = Coder0124::max_compressed_bytes(delta_skips.len());
     let mut delta_encoded = vec![0u8; tag_len + data_len];
     let (delta_tags, delta_data) = delta_encoded.split_at_mut(tag_len);
     let delta_data_len = coder.encode(&delta_skips, delta_tags, delta_data);
     let delta_data = &delta_data[..delta_data_len];
 
-    let mut prefix = [0u8; 16];
-    prefix[..4].copy_from_slice(&(headers.len() as u32).to_le_bytes());
-    prefix[4..8].copy_from_slice(&(literals.len() as u32).to_le_bytes());
-    prefix[8..12].copy_from_slice(&(delta_diffs.len() as u32).to_le_bytes());
-    prefix[12..].copy_from_slice(&(delta_data_len as u32).to_le_bytes());
+    let mut prefix = [0u8; 20];
+    prefix[..4].copy_from_slice(&(headers_len as u32).to_le_bytes());
+    prefix[4..8].copy_from_slice(&(header_data_len as u32).to_le_bytes());
+    prefix[8..12].copy_from_slice(&(literals.len() as u32).to_le_bytes());
+    prefix[12..16].copy_from_slice(&(delta_diffs.len() as u32).to_le_bytes());
+    prefix[16..].copy_from_slice(&(delta_data_len as u32).to_le_bytes());
 
     writer.write_all(&prefix)?;
+    writer.write_all(header_tags)?;
     writer.write_all(delta_tags)?;
-    writer.write_all(&headers)?;
+    writer.write_all(header_data)?;
     writer.write_all(&literals)?;
     writer.write_all(delta_data)?;
     writer.write_all(&delta_diffs)?;
