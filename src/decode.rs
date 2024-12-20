@@ -28,7 +28,7 @@ use crate::control::Bsdiff as BsdiffControl;
 use std::io;
 use std::io::Read;
 
-/// Decode a constrained representation of bsdiff output.
+/// Decode a reduced representation of bsdiff output.
 #[allow(clippy::ptr_arg)]
 pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
     let mut prefix = [0u8; 24];
@@ -40,23 +40,47 @@ pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
 
     let mut headers = vec![0; headers_len];
     let mut literals = vec![0; literals_len];
-    let mut deltas = vec![0; deltas_len];
+    let mut delta_skips = vec![0; 4 * deltas_len];
+    let mut delta_diffs = vec![0; deltas_len];
 
     reader.read_exact(&mut headers)?;
     reader.read_exact(&mut literals)?;
-    reader.read_exact(&mut deltas)?;
+    reader.read_exact(&mut delta_skips)?;
+    reader.read_exact(&mut delta_diffs)?;
+
+    let delta_skips = delta_skips
+        .chunks_exact(4)
+        .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+        .collect::<Vec<u32>>();
 
     let mut literals = literals.as_slice();
-    let mut deltas = deltas.as_slice();
+    let mut delta_skips = delta_skips.as_slice();
+    let mut delta_diffs = delta_diffs.as_slice();
+
+    let mut delta_buf = Vec::new();
+    let mut delta_cursor = 0;
+    let mut stream_cursor = 0;
 
     for buffer in headers.chunks_exact(12) {
         let control: BsdiffControl = (&AehobakControl::try_from(buffer).unwrap()).into();
         let (add, copy) = (control.add as usize, control.copy as usize);
         control.encode(patch);
-        patch.extend(&deltas[..add]);
+        delta_buf.clear();
+        delta_buf.resize(add, 0);
+        while !delta_skips.is_empty() && !delta_diffs.is_empty() {
+            let new_delta_cursor = delta_cursor + delta_skips[0] as usize;
+            if new_delta_cursor >= stream_cursor + add {
+                break;
+            }
+            delta_buf[new_delta_cursor - stream_cursor] = delta_diffs[0];
+            delta_cursor = new_delta_cursor + 1;
+            delta_skips = &delta_skips[1..];
+            delta_diffs = &delta_diffs[1..];
+        }
+        patch.extend(&delta_buf);
         patch.extend(&literals[..copy]);
-        deltas = &deltas[add..];
         literals = &literals[copy..];
+        stream_cursor += add + copy;
     }
     Ok(())
 }

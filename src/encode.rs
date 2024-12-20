@@ -28,16 +28,19 @@ use crate::control::Bsdiff as BsdiffControl;
 use std::io;
 use std::io::Write;
 
-/// Encode bsdiff output, returning a constrained representation.
+/// Encode bsdiff output, returning a reduced representation.
 pub fn encode<T: Write>(patch: &[u8], writer: &mut T) -> io::Result<()> {
     encode_internal(patch, writer)
 }
 
 fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
     let mut headers = Vec::<u8>::new();
-    let mut deltas = Vec::<u8>::new();
+    let mut delta_skips = Vec::<u32>::new();
+    let mut delta_diffs = Vec::<u8>::new();
     let mut literals = Vec::<u8>::new();
 
+    let mut delta_cursor = 0;
+    let mut stream_cursor = 0;
     while 24 <= patch.len() {
         let control: AehobakControl = BsdiffControl::try_from(&patch[..24])
             .unwrap()
@@ -46,7 +49,15 @@ fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
         control.encode(&mut headers);
         patch = &patch[24..];
         let (add, copy) = (control.add as usize, control.copy as usize);
-        deltas.extend(&patch[..add]);
+        for (idx, &delta) in patch[..add].iter().enumerate() {
+            if delta != 0 {
+                let skip = stream_cursor + idx - delta_cursor;
+                delta_skips.push(skip.try_into().unwrap());
+                delta_diffs.push(delta);
+                delta_cursor += skip + 1;
+            }
+        }
+        stream_cursor += add + copy;
         patch = &patch[add..];
         literals.extend(&patch[..copy]);
         patch = &patch[copy..];
@@ -55,12 +66,15 @@ fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
     let mut prefix = [0u8; 24];
     prefix[..8].copy_from_slice(&(headers.len() as u64).to_le_bytes());
     prefix[8..16].copy_from_slice(&(literals.len() as u64).to_le_bytes());
-    prefix[16..].copy_from_slice(&(deltas.len() as u64).to_le_bytes());
+    prefix[16..].copy_from_slice(&(delta_diffs.len() as u64).to_le_bytes());
 
     writer.write_all(&prefix)?;
     writer.write_all(&headers)?;
     writer.write_all(&literals)?;
-    writer.write_all(&deltas)?;
+    for skip in delta_skips {
+        writer.write_all(&skip.to_le_bytes())?;
+    }
+    writer.write_all(&delta_diffs)?;
 
     Ok(())
 }

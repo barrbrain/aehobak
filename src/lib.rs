@@ -48,5 +48,20 @@ mod tests {
             decode(&mut encoded.as_slice(), &mut decoded).unwrap();
             decoded == patch
         }
+
+        fn replace_one(old: Vec<u8>, idx: usize) -> bool {
+            let mut new = old.clone();
+            if !new.is_empty() {
+                let idx = idx % new.len();
+                new[idx] = new[idx].wrapping_add(1);
+            }
+            let mut patch = Vec::new();
+            let mut encoded = Vec::new();
+            let mut decoded = Vec::new();
+            bsdiff::diff(&old, &new, &mut patch).unwrap();
+            encode(&patch, &mut encoded).unwrap();
+            decode(&mut encoded.as_slice(), &mut decoded).unwrap();
+            decoded == patch
+        }
     }
 }
