@@ -63,10 +63,10 @@ fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
         patch = &patch[copy..];
     }
 
-    let mut prefix = [0u8; 24];
-    prefix[..8].copy_from_slice(&(headers.len() as u64).to_le_bytes());
-    prefix[8..16].copy_from_slice(&(literals.len() as u64).to_le_bytes());
-    prefix[16..].copy_from_slice(&(delta_diffs.len() as u64).to_le_bytes());
+    let mut prefix = [0u8; 12];
+    prefix[..4].copy_from_slice(&(headers.len() as u32).to_le_bytes());
+    prefix[4..8].copy_from_slice(&(literals.len() as u32).to_le_bytes());
+    prefix[8..].copy_from_slice(&(delta_diffs.len() as u32).to_le_bytes());
 
     writer.write_all(&prefix)?;
     writer.write_all(&headers)?;

@@ -31,12 +31,12 @@ use std::io::Read;
 /// Decode a reduced representation of bsdiff output.
 #[allow(clippy::ptr_arg)]
 pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
-    let mut prefix = [0u8; 24];
+    let mut prefix = [0u8; 12];
     reader.read_exact(&mut prefix)?;
 
-    let headers_len = u64::from_le_bytes(prefix[..8].try_into().unwrap()) as usize;
-    let literals_len = u64::from_le_bytes(prefix[8..16].try_into().unwrap()) as usize;
-    let deltas_len = u64::from_le_bytes(prefix[16..].try_into().unwrap()) as usize;
+    let headers_len = u32::from_le_bytes(prefix[..4].try_into().unwrap()) as usize;
+    let literals_len = u32::from_le_bytes(prefix[4..8].try_into().unwrap()) as usize;
+    let deltas_len = u32::from_le_bytes(prefix[8..].try_into().unwrap()) as usize;
 
     let mut headers = vec![0; headers_len];
     let mut literals = vec![0; literals_len];
