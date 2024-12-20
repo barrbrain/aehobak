@@ -23,6 +23,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+use crate::control::Bsdiff as BsdiffControl;
 use std::io;
 use std::io::Write;
 
@@ -37,13 +38,12 @@ fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
     let mut literals = Vec::<u8>::new();
 
     while 24 <= patch.len() {
-        let mix = u64::from_le_bytes(patch[..8].try_into().unwrap());
-        let copy = u64::from_le_bytes(patch[8..16].try_into().unwrap());
-        headers.extend(&patch[..24]);
+        let control: BsdiffControl = patch[..24].try_into().unwrap();
+        control.encode(&mut headers);
         patch = &patch[24..];
-        let (mix, copy) = (mix as usize, copy as usize);
-        deltas.extend(&patch[..mix]);
-        patch = &patch[mix..];
+        let (add, copy) = (control.add as usize, control.copy as usize);
+        deltas.extend(&patch[..add]);
+        patch = &patch[add..];
         literals.extend(&patch[..copy]);
         patch = &patch[copy..];
     }

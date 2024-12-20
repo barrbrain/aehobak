@@ -25,6 +25,7 @@
 
 #![doc = include_str!("../README.md")]
 
+mod control;
 mod decode;
 mod encode;
 

@@ -23,6 +23,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+use crate::control::Bsdiff as BsdiffControl;
 use std::io;
 use std::io::Read;
 
@@ -48,12 +49,12 @@ pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
     let mut deltas = deltas.as_slice();
 
     for buffer in headers.chunks_exact(24) {
-        let mix = u64::from_le_bytes(buffer[..8].try_into().unwrap()) as usize;
-        let copy = u64::from_le_bytes(buffer[8..16].try_into().unwrap()) as usize;
+        let control: BsdiffControl = buffer.try_into().unwrap();
+        let (add, copy) = (control.add as usize, control.copy as usize);
         patch.extend(buffer);
-        patch.extend(&deltas[..mix]);
+        patch.extend(&deltas[..add]);
         patch.extend(&literals[..copy]);
-        deltas = &deltas[mix..];
+        deltas = &deltas[add..];
         literals = &literals[copy..];
     }
     Ok(())
