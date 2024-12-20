@@ -30,6 +30,16 @@ pub struct Bsdiff {
     pub seek: i64,
 }
 
+impl From<&Aehobak> for Bsdiff {
+    fn from(control: &Aehobak) -> Self {
+        Bsdiff {
+            add: control.add.into(),
+            copy: control.copy.into(),
+            seek: control.seek.into(),
+        }
+    }
+}
+
 impl TryFrom<&[u8]> for Bsdiff {
     type Error = std::array::TryFromSliceError;
 
@@ -65,6 +75,52 @@ impl Bsdiff {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub struct Aehobak {
+    pub add: u32,
+    pub copy: u32,
+    pub seek: i32,
+}
+
+impl TryFrom<Bsdiff> for Aehobak {
+    type Error = std::num::TryFromIntError;
+
+    fn try_from(control: Bsdiff) -> Result<Self, Self::Error> {
+        Ok(Aehobak {
+            add: control.add.try_into()?,
+            copy: control.copy.try_into()?,
+            seek: control.seek.try_into()?,
+        })
+    }
+}
+
+impl TryFrom<&[u8]> for Aehobak {
+    type Error = std::array::TryFromSliceError;
+
+    fn try_from(buf: &[u8]) -> Result<Self, Self::Error> {
+        let _: &[u8; 12] = buf.try_into()?;
+        fn to_i32(x: u32) -> i32 {
+            (x >> 1) as i32 ^ ((x as i32 & 1) << 31 >> 31)
+        }
+        Ok(Self {
+            add: u32::from_le_bytes(buf[0..4].try_into().unwrap()),
+            copy: u32::from_le_bytes(buf[4..8].try_into().unwrap()),
+            seek: to_i32(u32::from_le_bytes(buf[8..12].try_into().unwrap())),
+        })
+    }
+}
+
+impl Aehobak {
+    pub fn encode(&self, patch: &mut Vec<u8>) {
+        fn to_u32(x: i32) -> u32 {
+            ((x >> 31) ^ (x << 1)) as u32
+        }
+        patch.extend(&self.add.to_le_bytes());
+        patch.extend(&self.copy.to_le_bytes());
+        patch.extend(&to_u32(self.seek).to_le_bytes());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,6 +132,21 @@ mod tests {
             let mut patch = Vec::new();
             reference.encode(&mut patch);
             let decoded: Bsdiff = patch.as_slice().try_into().unwrap();
+            decoded == reference
+        }
+
+        fn aehobak_round_trip(add: u32, copy: u32, seek: i32) -> bool {
+            let reference = Aehobak { add, copy, seek};
+            let mut patch = Vec::new();
+            reference.encode(&mut patch);
+            let decoded: Aehobak = patch.as_slice().try_into().unwrap();
+            decoded == reference
+        }
+
+        fn aehobak_into_bsdiff(add: u32, copy: u32, seek: i32) -> bool {
+            let reference = Aehobak { add, copy, seek};
+            let bsdiff: Bsdiff = (&reference).into();
+            let decoded: Aehobak = bsdiff.try_into().unwrap();
             decoded == reference
         }
     }
@@ -96,6 +167,24 @@ mod tests {
 
             let decoded: Bsdiff = patch.as_slice().try_into().unwrap();
             let reference = Bsdiff { add, copy, seek };
+            assert_eq!(decoded, reference);
+        }
+    }
+
+    #[test]
+    fn aehobak_vectors() {
+        let mut patch = vec![0; 12];
+        for (v, (add, copy, seek)) in [
+            ((0, 0, 0), (0, 0, 0)),
+            ((1, 1, 2), (1, 1, 1)),
+            ((0, 0, 1), (0, 0, -1)),
+        ] {
+            patch[0] = v.0;
+            patch[4] = v.1;
+            patch[8] = v.2;
+
+            let decoded: Aehobak = patch.as_slice().try_into().unwrap();
+            let reference = Aehobak { add, copy, seek };
             assert_eq!(decoded, reference);
         }
     }

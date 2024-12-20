@@ -23,11 +23,12 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+use crate::control::Aehobak as AehobakControl;
 use crate::control::Bsdiff as BsdiffControl;
 use std::io;
 use std::io::Write;
 
-/// Encode bsdiff output, returning a segmented representation.
+/// Encode bsdiff output, returning a constrained representation.
 pub fn encode<T: Write>(patch: &[u8], writer: &mut T) -> io::Result<()> {
     encode_internal(patch, writer)
 }
@@ -38,7 +39,10 @@ fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
     let mut literals = Vec::<u8>::new();
 
     while 24 <= patch.len() {
-        let control: BsdiffControl = patch[..24].try_into().unwrap();
+        let control: AehobakControl = BsdiffControl::try_from(&patch[..24])
+            .unwrap()
+            .try_into()
+            .unwrap();
         control.encode(&mut headers);
         patch = &patch[24..];
         let (add, copy) = (control.add as usize, control.copy as usize);

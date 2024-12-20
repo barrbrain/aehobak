@@ -23,11 +23,12 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+use crate::control::Aehobak as AehobakControl;
 use crate::control::Bsdiff as BsdiffControl;
 use std::io;
 use std::io::Read;
 
-/// Decode a segmented representation of bsdiff output.
+/// Decode a constrained representation of bsdiff output.
 #[allow(clippy::ptr_arg)]
 pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
     let mut prefix = [0u8; 24];
@@ -48,10 +49,10 @@ pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
     let mut literals = literals.as_slice();
     let mut deltas = deltas.as_slice();
 
-    for buffer in headers.chunks_exact(24) {
-        let control: BsdiffControl = buffer.try_into().unwrap();
+    for buffer in headers.chunks_exact(12) {
+        let control: BsdiffControl = (&AehobakControl::try_from(buffer).unwrap()).into();
         let (add, copy) = (control.add as usize, control.copy as usize);
-        patch.extend(buffer);
+        control.encode(patch);
         patch.extend(&deltas[..add]);
         patch.extend(&literals[..copy]);
         deltas = &deltas[add..];
