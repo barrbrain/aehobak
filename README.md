@@ -8,4 +8,3 @@
 
 Aehobak transcodes binary patches from [bsdiff](https://crates.io/crates/bsdiff).
 The goal is a byte-oriented format, compact and optimised for patch application speed.
-This version copies the frames verbatim.

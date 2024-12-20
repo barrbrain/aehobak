@@ -29,7 +29,7 @@ use std::io;
 use std::io::Write;
 use streamvbyte64::{Coder, Coder0124};
 
-/// Encode bsdiff output, returning a reduced representation.
+/// Encode bsdiff output, returning a compact representation.
 pub fn encode<T: Write>(patch: &[u8], writer: &mut T) -> io::Result<()> {
     encode_internal(patch, writer)
 }

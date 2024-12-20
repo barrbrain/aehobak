@@ -29,7 +29,7 @@ use std::io;
 use std::io::Read;
 use streamvbyte64::{Coder, Coder0124};
 
-/// Decode a reduced representation of bsdiff output.
+/// Decode a compact representation of bsdiff output.
 #[allow(clippy::ptr_arg)]
 pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
     let mut prefix = [0u8; 20];
