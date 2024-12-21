@@ -1,6 +1,6 @@
 [package]
 name = "aehobak"
-version = "0.0.2"
+version = "0.0.4"
 authors = ["David Michael Barr <b@rr-dav.id.au>"]
 description = "Transcoder for bsdiff binary patches."
 readme = "README.md"
@@ -10,7 +10,7 @@ license = "BSD-2-Clause"
 homepage = "https://lib.rs/aehobak"
 repository = "https://github.com/barrbrain/aehobak"
 edition = "2021"
-include = ["src/*.rs", "LICENSE", "README.md", "Cargo.toml"]
+include = ["src/*.rs", "examples/*.rs", "LICENSE", "README.md", "Cargo.toml"]
 
 [dependencies]
 streamvbyte64 = "0.2.0"

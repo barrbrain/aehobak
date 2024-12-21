@@ -8,6 +8,14 @@
 
 Aehobak transcodes binary patches from [bsdiff](https://crates.io/crates/bsdiff).
 The goal is a byte-oriented format, compact and optimised for patch application speed.
+As compression efficiency is content-dependent, one should verify with a suitable corpus.
+The following results are for LZ4-compressed bsdiff patches of build artifacts that are **under 3%** of the target object size. The `bench` example can report the same metrics for provided files.
+
+**LZ4-compressed aehobak** patches are on average **45.3% smaller**.
+
+**Uncompressed aehobak** patches are on average:
+- 28.2% larger than **compressed bsdiff** patches
+- 98.8% smaller than **uncompressed bsdiff** patches
 
 ## Usage
 
