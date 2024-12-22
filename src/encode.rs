@@ -58,7 +58,7 @@ fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
                 delta_cursor += skip + 1;
             }
         }
-        stream_cursor += add + copy;
+        stream_cursor += add;
         patch = &patch[add..];
         literals.extend(&patch[..copy]);
         patch = &patch[copy..];

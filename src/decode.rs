@@ -95,7 +95,7 @@ pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
         patch.extend(&delta_buf);
         patch.extend(&literals[..copy]);
         literals = &literals[copy..];
-        stream_cursor += add + copy;
+        stream_cursor += add;
     }
     Ok(())
 }
