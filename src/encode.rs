@@ -83,14 +83,22 @@ fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
     let delta_data_len = coder.encode(&delta_skips, delta_tags, delta_data);
     let delta_data = &delta_data[..delta_data_len];
 
-    let mut prefix = [0u8; 20];
-    prefix[..4].copy_from_slice(&(controls_len as u32).to_le_bytes());
-    prefix[4..8].copy_from_slice(&(control_data_len as u32).to_le_bytes());
-    prefix[8..12].copy_from_slice(&(literals.len() as u32).to_le_bytes());
-    prefix[12..16].copy_from_slice(&(delta_diffs.len() as u32).to_le_bytes());
-    prefix[16..].copy_from_slice(&(delta_data_len as u32).to_le_bytes());
+    let mut prefix = [0u8; 17];
+    let prefix_len = 1 + {
+        let (tag, data) = prefix.as_mut_slice().split_at_mut(1);
+        coder.encode(
+            &[
+                (controls_len / 3) as u32,
+                delta_diffs.len() as u32,
+                control_data_len as u32,
+                literals.len() as u32,
+            ],
+            tag,
+            data,
+        )
+    };
 
-    writer.write_all(&prefix)?;
+    writer.write_all(&prefix[..prefix_len])?;
     writer.write_all(control_tags)?;
     writer.write_all(delta_tags)?;
     writer.write_all(control_data)?;

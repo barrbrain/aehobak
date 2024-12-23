@@ -32,37 +32,42 @@ use streamvbyte64::{Coder, Coder0124};
 /// Decode a compact representation of bsdiff output.
 #[allow(clippy::ptr_arg)]
 pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
-    let mut prefix = [0u8; 20];
-    reader.read_exact(&mut prefix)?;
+    let mut prefix = [0u8; 17];
+    reader.read_exact(&mut prefix[..1])?;
 
-    let controls_len = u32::from_le_bytes(prefix[..4].try_into().unwrap()) as usize;
-    let control_data_len = u32::from_le_bytes(prefix[4..8].try_into().unwrap()) as usize;
-    let literals_len = u32::from_le_bytes(prefix[8..12].try_into().unwrap()) as usize;
-    let deltas_len = u32::from_le_bytes(prefix[12..16].try_into().unwrap()) as usize;
-    let delta_data_len = u32::from_le_bytes(prefix[16..].try_into().unwrap()) as usize;
+    let coder = Coder0124::new();
 
-    let control_tags_len = (controls_len + 3) / 4;
+    let prefix_len = coder.data_len(&prefix[..1]);
+    reader.read_exact(&mut prefix[1..1 + prefix_len])?;
+
+    let (controls_len, deltas_len, control_data_len, literals_len) = {
+        let mut v = [0u32; 4];
+        let (tag, data) = prefix.as_mut_slice().split_at_mut(1);
+        coder.decode(tag, data, &mut v);
+        (v[0] as usize, v[1] as usize, v[2] as usize, v[3] as usize)
+    };
+
+    let control_tags_len = (controls_len * 3 + 3) / 4;
     let delta_tags_len = (deltas_len + 3) / 4;
 
     let mut control_tags = vec![0; control_tags_len];
     let mut control_data = vec![0; control_data_len];
-    let mut literals = vec![0; literals_len];
     let mut delta_diffs = vec![0; deltas_len];
+    let mut literals = vec![0; literals_len];
     let mut delta_tags = vec![0; delta_tags_len];
-    let mut delta_data = vec![0; delta_data_len];
 
     reader.read_exact(&mut control_tags)?;
     reader.read_exact(&mut delta_tags)?;
+    let delta_data_len = coder.data_len(&delta_tags);
     reader.read_exact(&mut control_data)?;
     reader.read_exact(&mut literals)?;
+    let mut delta_data = vec![0; delta_data_len];
     reader.read_exact(&mut delta_data)?;
     reader.read_exact(&mut delta_diffs)?;
 
-    let coder = Coder0124::new();
-
     let mut controls = vec![0; 4 * control_tags_len];
     let _ = coder.decode(&control_tags, &control_data, &mut controls);
-    controls.truncate(controls_len);
+    controls.truncate(controls_len * 3);
 
     let mut delta_skips = vec![0; 4 * delta_tags_len];
     let _ = coder.decode(&delta_tags, &delta_data, &mut delta_skips);
