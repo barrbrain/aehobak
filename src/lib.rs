@@ -28,9 +28,11 @@
 mod control;
 mod decode;
 mod encode;
+mod patch;
 
 pub use decode::decode;
 pub use encode::encode;
+pub use patch::patch;
 
 #[cfg(test)]
 mod tests {
@@ -62,6 +64,21 @@ mod tests {
             encode(&patch, &mut encoded).unwrap();
             decode(&mut encoded.as_slice(), &mut decoded).unwrap();
             decoded == patch
+        }
+
+        fn direct_patch(old: Vec<u8>, idx: usize) -> bool {
+            let mut new = old.clone();
+            if !new.is_empty() {
+                let idx = idx % new.len();
+                new[idx] = new[idx].wrapping_add(1);
+            }
+            let mut bspatch = Vec::new();
+            let mut encoded = Vec::new();
+            let mut result = Vec::new();
+            bsdiff::diff(&old, &new, &mut bspatch).unwrap();
+            encode(&bspatch, &mut encoded).unwrap();
+            patch(&old, &encoded, &mut result).unwrap();
+            result == new
         }
     }
 }
