@@ -9,11 +9,9 @@ fn main() {
 
 fn patch_file(orig_file: &str, patch_file: &str, file: &str) -> std::io::Result<()> {
     let old = std::fs::read(orig_file)?;
-    let encoded = std::fs::read(patch_file)?;
+    let patch = std::fs::read(patch_file)?;
     let mut new = Vec::new();
-    let mut patch = Vec::new();
 
-    aehobak::decode(&mut encoded.as_slice(), &mut patch)?;
-    bsdiff::patch(&old, &mut patch.as_slice(), &mut new)?;
-    std::fs::write(file, &encoded)
+    aehobak::patch(&old, &patch, &mut new)?;
+    std::fs::write(file, &new)
 }
