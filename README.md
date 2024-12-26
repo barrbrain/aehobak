@@ -17,6 +17,8 @@ The following results are for LZ4-compressed bsdiff patches of build artifacts t
 - 38.1% over **LZ4-compressed bsdiff** patches
 - 98.9% over **uncompressed bsdiff** patches
 
+Direct application of aehobak patches can achieve 70% of memcpy speed.
+
 ## Usage
 
 ```rust
