@@ -98,7 +98,7 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
     let _ = coder.decode(delta_tags, delta_data, delta_skips);
     let mut delta_skips = &delta_skips[..deltas_len];
 
-    let mut old_cursor: i64 = 0;
+    let mut old_cursor: usize = 0;
     let mut delta_cursor: usize = 0;
     let mut stream_cursor: usize = 0;
 
@@ -109,7 +109,7 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
             .checked_add(add)
             .ok_or(io::Error::from(InvalidData))?;
         let old_slice = old
-            .get(old_cursor as usize..)
+            .get(old_cursor..)
             .ok_or(io::Error::from(UnexpectedEof))?
             .get(..add)
             .ok_or(io::Error::from(UnexpectedEof))?;
@@ -133,11 +133,17 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
         new.extend(literals.get(..copy).ok_or(io::Error::from(UnexpectedEof))?);
         literals = &literals[copy..];
         stream_cursor = new_stream_cursor;
-        old_cursor = old_cursor
-            .checked_add(add as i64)
-            .ok_or(io::Error::from(InvalidData))?
+        old_cursor = usize::try_from(
+            i64::try_from(
+                old_cursor
+                    .checked_add(add)
+                    .ok_or(io::Error::from(InvalidData))?,
+            )
+            .map_err(|_| io::Error::from(InvalidData))?
             .checked_add(control.seek)
-            .ok_or(io::Error::from(InvalidData))?;
+            .ok_or(io::Error::from(InvalidData))?,
+        )
+        .map_err(|_| io::Error::from(InvalidData))?;
     }
     Ok(())
 }

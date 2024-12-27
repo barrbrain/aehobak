@@ -83,13 +83,14 @@ mod tests {
         }
 
         fn arbitrary_patch(skeleton: LinkedList<(u8,u8,i8)>, period: u8) -> bool {
-            use std::io::ErrorKind::UnexpectedEof;
+            use std::io::ErrorKind::{InvalidData, UnexpectedEof};
             let (bspatch, old_len) = gen_bspatch(skeleton, period);
             let mut encoded = Vec::new();
             let mut result = Vec::new();
             let old = vec![0; old_len];
             encode(&bspatch, &mut encoded).unwrap();
             match patch(&old, &encoded, &mut result) {
+                Err(e) if e.kind() == InvalidData => true,
                 Err(e) if e.kind() == UnexpectedEof => true,
                 Ok(_) => true,
                 _ => false,
