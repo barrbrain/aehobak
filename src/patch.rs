@@ -92,8 +92,17 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
         .checked_mul(4)
         .ok_or(io::Error::from(InvalidData))?;
     let mut u32_buf = vec![0; buf_len];
+    // SAFETY: This follows from the checked arithmetic above
+    unsafe {
+        assert_unchecked(u32_buf.len() >= 4 * control_tags_len);
+    }
     let (controls, delta_skips) = u32_buf.split_at_mut(4 * control_tags_len);
 
+    // SAFETY: This follows from the checked arithmetic above
+    unsafe {
+        assert_unchecked(controls.len() >= controls_len * 3);
+        assert_unchecked(delta_skips.len() >= deltas_len);
+    }
     let _ = coder.decode(control_tags, control_data, controls);
     let controls = &controls[..controls_len * 3];
     let _ = coder.decode(delta_tags, delta_data, delta_skips);
