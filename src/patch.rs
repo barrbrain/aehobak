@@ -114,7 +114,7 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
             .get(..add)
             .ok_or(io::Error::from(UnexpectedEof))?;
         let new_cursor = new.len();
-        new.extend(old_slice);
+        new.extend_from_slice(old_slice);
         while !delta_skips.is_empty() && !delta_diffs.is_empty() {
             let Some(new_delta_cursor) = delta_cursor.checked_add(delta_skips[0] as usize) else {
                 break;
@@ -130,7 +130,7 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
             delta_skips = &delta_skips[1..];
             delta_diffs = &delta_diffs[1..];
         }
-        new.extend(literals.get(..copy).ok_or(io::Error::from(UnexpectedEof))?);
+        new.extend_from_slice(literals.get(..copy).ok_or(io::Error::from(UnexpectedEof))?);
         literals = &literals[copy..];
         stream_cursor = new_stream_cursor;
         old_cursor = usize::try_from(
