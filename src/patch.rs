@@ -25,6 +25,7 @@
 
 use crate::control::Aehobak as AehobakControl;
 use crate::control::Bsdiff as BsdiffControl;
+use std::hint::assert_unchecked;
 use std::io;
 use std::io::ErrorKind::{InvalidData, UnexpectedEof};
 use streamvbyte64::{Coder, Coder0124};
@@ -121,6 +122,10 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
             };
             if new_delta_cursor >= new_stream_cursor {
                 break;
+            }
+            // SAFETY: This follows from the checked arithmetic above
+            unsafe {
+                assert_unchecked(new.len() > new_delta_cursor - stream_cursor + new_cursor);
             }
             let new_byte = &mut new[new_delta_cursor - stream_cursor + new_cursor];
             *new_byte = new_byte.wrapping_add(delta_diffs[0]);
