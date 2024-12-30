@@ -69,17 +69,19 @@ pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
     let _ = coder.decode(&control_tags, &control_data, &mut controls);
     controls.truncate(controls_len * 3);
 
-    let mut delta_skips = vec![0; 4 * delta_tags_len];
-    let _ = coder.decode(&delta_tags, &delta_data, &mut delta_skips);
-    delta_skips.truncate(deltas_len);
+    let mut delta_pos = vec![0; 4 * delta_tags_len];
+    let _ = coder.decode_deltas(0, &delta_tags, &delta_data, &mut delta_pos);
+    delta_pos.truncate(deltas_len);
+    for (idx, pos) in delta_pos.iter_mut().enumerate() {
+        *pos = (*pos).wrapping_add(idx as u32);
+    }
 
     let mut literals = literals.as_slice();
-    let mut delta_skips = delta_skips.as_slice();
+    let mut delta_pos = delta_pos.as_slice();
     let mut delta_diffs = delta_diffs.as_slice();
 
     let mut delta_buf = Vec::new();
-    let mut delta_cursor = 0;
-    let mut stream_cursor = 0;
+    let mut add_cursor = 0;
 
     for buffer in controls.chunks_exact(3) {
         let control: BsdiffControl = (&AehobakControl::try_from(buffer).unwrap()).into();
@@ -87,20 +89,19 @@ pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
         control.encode(patch);
         delta_buf.clear();
         delta_buf.resize(add, 0);
-        while !delta_skips.is_empty() && !delta_diffs.is_empty() {
-            let new_delta_cursor = delta_cursor + delta_skips[0] as usize;
-            if new_delta_cursor >= stream_cursor + add {
+        while !delta_pos.is_empty() && !delta_diffs.is_empty() {
+            let delta_cursor = delta_pos[0] as usize;
+            if delta_cursor >= add_cursor + add {
                 break;
             }
-            delta_buf[new_delta_cursor - stream_cursor] = delta_diffs[0];
-            delta_cursor = new_delta_cursor + 1;
-            delta_skips = &delta_skips[1..];
+            delta_buf[delta_cursor - add_cursor] = delta_diffs[0];
+            delta_pos = &delta_pos[1..];
             delta_diffs = &delta_diffs[1..];
         }
         patch.extend(&delta_buf);
         patch.extend(&literals[..copy]);
         literals = &literals[copy..];
-        stream_cursor += add;
+        add_cursor += add;
     }
     Ok(())
 }

@@ -96,57 +96,47 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
     unsafe {
         assert_unchecked(u32_buf.len() >= 4 * control_tags_len);
     }
-    let (controls, delta_skips) = u32_buf.split_at_mut(4 * control_tags_len);
+    let (controls, delta_pos) = u32_buf.split_at_mut(4 * control_tags_len);
 
     // SAFETY: This follows from the checked arithmetic above
     unsafe {
         assert_unchecked(controls.len() >= controls_len * 3);
-        assert_unchecked(delta_skips.len() >= deltas_len);
+        assert_unchecked(delta_pos.len() >= deltas_len);
     }
     let _ = coder.decode(control_tags, control_data, controls);
     let controls = &controls[..controls_len * 3];
-    let _ = coder.decode(delta_tags, delta_data, delta_skips);
-    let mut delta_skips = &delta_skips[..deltas_len];
+    let _ = coder.decode_deltas(0, delta_tags, delta_data, delta_pos);
+    for (idx, pos) in delta_pos.iter_mut().enumerate() {
+        *pos = (*pos).wrapping_add(idx as u32);
+    }
+    let mut delta_pos = &delta_pos[..deltas_len];
 
     let mut old_cursor: usize = 0;
-    let mut delta_cursor: usize = 0;
-    let mut stream_cursor: usize = 0;
+    let mut copy_cursor: usize = 0;
 
     for buffer in controls.chunks_exact(3) {
         let control: BsdiffControl = (&AehobakControl::try_from(buffer).unwrap()).into();
         let (add, copy) = (control.add as usize, control.copy as usize);
-        let new_stream_cursor = stream_cursor
-            .checked_add(add)
-            .ok_or(io::Error::from(InvalidData))?;
         let old_slice = old
             .get(old_cursor..)
             .ok_or(io::Error::from(UnexpectedEof))?
             .get(..add)
             .ok_or(io::Error::from(UnexpectedEof))?;
-        let new_cursor = new.len();
         new.extend_from_slice(old_slice);
-        while !delta_skips.is_empty() && !delta_diffs.is_empty() {
-            let Some(new_delta_cursor) = delta_cursor.checked_add(delta_skips[0] as usize) else {
-                break;
-            };
-            if new_delta_cursor >= new_stream_cursor {
+        let mut nonzero = delta_pos.len().min(delta_diffs.len());
+        for i in 0..nonzero {
+            let delta_cursor = copy_cursor.wrapping_add(delta_pos[i] as usize);
+            if delta_cursor >= new.len() {
+                nonzero = i;
                 break;
             }
-            // SAFETY: This follows from the checked arithmetic above
-            unsafe {
-                assert_unchecked(new.len() > new_delta_cursor - stream_cursor + new_cursor);
-            }
-            let new_byte = &mut new[new_delta_cursor - stream_cursor + new_cursor];
-            *new_byte = new_byte.wrapping_add(delta_diffs[0]);
-            delta_cursor = new_delta_cursor
-                .checked_add(1)
-                .ok_or(io::Error::from(InvalidData))?;
-            delta_skips = &delta_skips[1..];
-            delta_diffs = &delta_diffs[1..];
+            new[delta_cursor] = new[delta_cursor].wrapping_add(delta_diffs[i]);
         }
+        delta_pos = &delta_pos[nonzero..];
+        delta_diffs = &delta_diffs[nonzero..];
         new.extend_from_slice(literals.get(..copy).ok_or(io::Error::from(UnexpectedEof))?);
         literals = &literals[copy..];
-        stream_cursor = new_stream_cursor;
+        copy_cursor = copy_cursor.wrapping_add(copy);
         old_cursor = usize::try_from(
             i64::try_from(
                 old_cursor

@@ -40,8 +40,7 @@ fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
     let mut delta_diffs = Vec::<u8>::new();
     let mut literals = Vec::<u8>::new();
 
-    let mut delta_cursor = 0;
-    let mut stream_cursor = 0;
+    let mut add_cursor = 0;
     while 24 <= patch.len() {
         let control: AehobakControl = BsdiffControl::try_from(&patch[..24])
             .unwrap()
@@ -52,13 +51,12 @@ fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
         let (add, copy) = (control.add as usize, control.copy as usize);
         for (idx, &delta) in patch[..add].iter().enumerate() {
             if delta != 0 {
-                let skip = stream_cursor + idx - delta_cursor;
+                let skip = add_cursor + idx - delta_skips.len();
                 delta_skips.push(skip.try_into().unwrap());
                 delta_diffs.push(delta);
-                delta_cursor += skip + 1;
             }
         }
-        stream_cursor += add;
+        add_cursor += add;
         patch = &patch[add..];
         literals.extend(&patch[..copy]);
         patch = &patch[copy..];
@@ -80,7 +78,7 @@ fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
     let (tag_len, data_len) = Coder0124::max_compressed_bytes(delta_skips.len());
     let mut delta_encoded = vec![0u8; tag_len + data_len];
     let (delta_tags, delta_data) = delta_encoded.split_at_mut(tag_len);
-    let delta_data_len = coder.encode(&delta_skips, delta_tags, delta_data);
+    let delta_data_len = coder.encode_deltas(0, &delta_skips, delta_tags, delta_data);
     let delta_data = &delta_data[..delta_data_len];
 
     let mut prefix = [0u8; 17];
