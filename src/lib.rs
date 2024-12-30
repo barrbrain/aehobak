@@ -75,7 +75,7 @@ mod tests {
             }
             let mut bspatch = Vec::new();
             let mut encoded = Vec::new();
-            let mut result = Vec::new();
+            let mut result = Vec::with_capacity(new.len());
             bsdiff::diff(&old, &new, &mut bspatch).unwrap();
             encode(&bspatch, &mut encoded).unwrap();
             patch(&old, &encoded, &mut result).unwrap();
@@ -84,9 +84,9 @@ mod tests {
 
         fn arbitrary_patch(skeleton: LinkedList<(u8,u8,i8)>, period: u8) -> bool {
             use std::io::ErrorKind::{InvalidData, UnexpectedEof};
-            let (bspatch, old_len) = gen_bspatch(skeleton, period);
+            let (bspatch, old_len, new_len) = gen_bspatch(skeleton, period);
             let mut encoded = Vec::new();
-            let mut result = Vec::new();
+            let mut result = Vec::with_capacity(new_len);
             let old = vec![0; old_len];
             encode(&bspatch, &mut encoded).unwrap();
             match patch(&old, &encoded, &mut result) {
@@ -98,11 +98,12 @@ mod tests {
         }
     }
 
-    fn gen_bspatch(skeleton: LinkedList<(u8, u8, i8)>, period: u8) -> (Vec<u8>, usize) {
+    fn gen_bspatch(skeleton: LinkedList<(u8, u8, i8)>, period: u8) -> (Vec<u8>, usize, usize) {
         use crate::control::{Aehobak, Bsdiff};
         let mut bspatch = Vec::new();
         let mut diffs = 0;
         let mut old_len = 0;
+        let mut new_len = 0;
         let mut cursor = 0;
         for (add, copy, seek) in skeleton {
             let (add, copy, seek) = (add as u32, copy as u32, seek as i32);
@@ -118,7 +119,8 @@ mod tests {
             old_len = old_len.max(cursor);
             cursor = (cursor as i64 + seek as i64).max(0) as usize;
             bspatch.resize(bspatch.len() + copy as usize, 0);
+            new_len += copy as usize + add as usize;
         }
-        (bspatch, old_len)
+        (bspatch, old_len, new_len)
     }
 }

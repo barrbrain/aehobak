@@ -31,6 +31,7 @@ use std::io::ErrorKind::{InvalidData, UnexpectedEof};
 use streamvbyte64::{Coder, Coder0124};
 
 /// Directly apply a compact representation of bsdiff output.
+/// Attempts to fill `new` beyond its capacity will result in `Err`.
 #[allow(clippy::ptr_arg)]
 pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> {
     let prefix_tag = patch.get(..1).ok_or(io::Error::from(UnexpectedEof))?;
@@ -122,6 +123,9 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
             .ok_or(io::Error::from(UnexpectedEof))?
             .get(..add)
             .ok_or(io::Error::from(UnexpectedEof))?;
+        if new.capacity().wrapping_sub(new.len()) < old_slice.len() {
+            Err(io::Error::from(UnexpectedEof))?;
+        }
         new.extend_from_slice(old_slice);
         let mut nonzero = delta_pos.len().min(delta_diffs.len());
         for i in 0..nonzero {
@@ -134,7 +138,11 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
         }
         delta_pos = &delta_pos[nonzero..];
         delta_diffs = &delta_diffs[nonzero..];
-        new.extend_from_slice(literals.get(..copy).ok_or(io::Error::from(UnexpectedEof))?);
+        let lit_slice = literals.get(..copy).ok_or(io::Error::from(UnexpectedEof))?;
+        if new.capacity().wrapping_sub(new.len()) < lit_slice.len() {
+            Err(io::Error::from(UnexpectedEof))?;
+        }
+        new.extend_from_slice(lit_slice);
         literals = &literals[copy..];
         copy_cursor = copy_cursor.wrapping_add(copy);
         old_cursor = usize::try_from(
