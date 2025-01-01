@@ -1,5 +1,5 @@
 /*-
- * Copyright 2024 David Michael Barr
+ * Copyright 2025 David Michael Barr
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted providing that the following conditions
@@ -40,51 +40,49 @@ pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
     let prefix_len = coder.data_len(&prefix[..1]);
     reader.read_exact(&mut prefix[1..1 + prefix_len])?;
 
-    let (controls_len, deltas_len, control_data_len, literals_len) = {
+    let (literals_len, controls, deltas_len, data_len) = {
         let mut v = [0u32; 4];
         let (tag, data) = prefix.as_mut_slice().split_at_mut(1);
         coder.decode(tag, data, &mut v);
         (v[0] as usize, v[1] as usize, v[2] as usize, v[3] as usize)
     };
 
-    let control_tags_len = (controls_len * 3 + 3) / 4;
-    let delta_tags_len = (deltas_len + 3) / 4;
+    let tags_len = controls.div_ceil(4) * 3 + deltas_len.div_ceil(4);
 
-    let mut control_tags = vec![0; control_tags_len];
-    let mut control_data = vec![0; control_data_len];
-    let mut delta_diffs = vec![0; deltas_len];
     let mut literals = vec![0; literals_len];
-    let mut delta_tags = vec![0; delta_tags_len];
+    let mut tags = vec![0; tags_len];
+    let mut delta_diffs = vec![0; deltas_len];
+    let mut data = vec![0; data_len];
 
-    reader.read_exact(&mut control_tags)?;
-    reader.read_exact(&mut delta_tags)?;
-    let delta_data_len = coder.data_len(&delta_tags);
-    reader.read_exact(&mut control_data)?;
     reader.read_exact(&mut literals)?;
-    let mut delta_data = vec![0; delta_data_len];
-    reader.read_exact(&mut delta_data)?;
+    reader.read_exact(&mut tags)?;
     reader.read_exact(&mut delta_diffs)?;
+    reader.read_exact(&mut data)?;
 
-    let mut controls = vec![0; 4 * control_tags_len];
-    let _ = coder.decode(&control_tags, &control_data, &mut controls);
-    controls.truncate(controls_len * 3);
-
-    let mut delta_pos = vec![0; 4 * delta_tags_len];
-    let _ = coder.decode_deltas(0, &delta_tags, &delta_data, &mut delta_pos);
-    delta_pos.truncate(deltas_len);
-    for (idx, pos) in delta_pos.iter_mut().enumerate() {
-        *pos = (*pos).wrapping_add(idx as u32);
+    let mut u32_seq = vec![0; 4 * tags_len];
+    let _ = coder.decode(&tags, &data, &mut u32_seq);
+    let controls_padded = controls.div_ceil(4) * 4;
+    let delta_pos = &mut u32_seq[controls_padded * 3..];
+    let mut delta_cursor: u32 = 0;
+    for skip in delta_pos {
+        let pos = delta_cursor.wrapping_add(*skip);
+        delta_cursor = delta_cursor.wrapping_add(*skip).wrapping_add(1);
+        *skip = pos;
     }
+    let mut delta_pos = &u32_seq[controls_padded * 3..][..deltas_len];
+    let seeks = &u32_seq[..controls];
+    let adds = &u32_seq[controls_padded..][..controls];
+    let copies = &u32_seq[controls_padded * 2..][..controls];
 
     let mut literals = literals.as_slice();
-    let mut delta_pos = delta_pos.as_slice();
     let mut delta_diffs = delta_diffs.as_slice();
 
     let mut delta_buf = Vec::new();
     let mut add_cursor = 0;
 
-    for buffer in controls.chunks_exact(3) {
-        let control: BsdiffControl = (&AehobakControl::try_from(buffer).unwrap()).into();
+    for (&add, (&copy, &seek)) in adds.iter().zip(copies.iter().zip(seeks)) {
+        let control: BsdiffControl =
+            (&AehobakControl::try_from(&[add, copy, seek][..]).unwrap()).into();
         let (add, copy) = (control.add as usize, control.copy as usize);
         control.encode(patch);
         delta_buf.clear();

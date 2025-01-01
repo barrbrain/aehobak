@@ -1,5 +1,5 @@
 /*-
- * Copyright 2024 David Michael Barr
+ * Copyright 2025 David Michael Barr
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted providing that the following conditions

@@ -1,5 +1,5 @@
 /*-
- * Copyright 2024 David Michael Barr
+ * Copyright 2025 David Michael Barr
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted providing that the following conditions
@@ -23,8 +23,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-use crate::control::Aehobak as AehobakControl;
-use crate::control::Bsdiff as BsdiffControl;
 use std::hint::assert_unchecked;
 use std::io;
 use std::io::ErrorKind::{InvalidData, UnexpectedEof};
@@ -42,82 +40,76 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
     if patch.len() < prefix_len {
         return Err(io::Error::from(UnexpectedEof));
     }
-    let (controls_len, deltas_len, control_data_len, literals_len) = {
+    let (literals_len, controls, deltas_len, data_len) = {
         let mut v = [0u32; 4];
         coder.decode(prefix_tag, patch, &mut v);
         (v[0] as usize, v[1] as usize, v[2] as usize, v[3] as usize)
     };
     patch = &patch[prefix_len..];
 
-    let control_tags_len = controls_len
-        .checked_mul(3)
-        .ok_or(io::Error::from(InvalidData))?
-        .div_ceil(4);
-    let delta_tags_len = deltas_len.div_ceil(4);
-
-    let control_tags = patch
-        .get(..control_tags_len)
-        .ok_or(io::Error::from(UnexpectedEof))?;
-    patch = &patch[control_tags_len..];
-
-    let delta_tags = patch
-        .get(..delta_tags_len)
-        .ok_or(io::Error::from(UnexpectedEof))?;
-    patch = &patch[delta_tags_len..];
-
-    if patch.len() < control_data_len {
-        return Err(io::Error::from(UnexpectedEof));
-    }
-    let control_data = patch;
-    patch = &patch[control_data_len..];
-
     let mut literals = patch
         .get(..literals_len)
         .ok_or(io::Error::from(UnexpectedEof))?;
     patch = &patch[literals_len..];
 
-    let delta_data_len = coder.data_len(delta_tags);
-    if patch.len() < delta_data_len {
-        return Err(io::Error::from(UnexpectedEof));
-    }
-    let delta_data = patch;
-    patch = &patch[delta_data_len..];
+    let tags_len = controls
+        .div_ceil(4)
+        .checked_mul(3)
+        .ok_or(io::Error::from(InvalidData))?
+        .checked_add(deltas_len.div_ceil(4))
+        .ok_or(io::Error::from(InvalidData))?;
+    let u32_seq_len = tags_len
+        .checked_mul(4)
+        .ok_or(io::Error::from(InvalidData))?;
+    // SAFETY: This follows from the checked arithmetic above
+    unsafe { assert_unchecked(u32_seq_len >= controls.div_ceil(4) * 12) }
+
+    let tags = patch
+        .get(..tags_len)
+        .ok_or(io::Error::from(UnexpectedEof))?;
+    patch = &patch[tags_len..];
+    let (control_tags, delta_tags) = tags.split_at(controls.div_ceil(4) * 3);
 
     let mut delta_diffs = patch
         .get(..deltas_len)
         .ok_or(io::Error::from(UnexpectedEof))?;
+    patch = &patch[deltas_len..];
 
-    let buf_len = control_tags_len
-        .checked_add(delta_tags_len)
-        .ok_or(io::Error::from(InvalidData))?
-        .checked_mul(4)
-        .ok_or(io::Error::from(InvalidData))?;
-    let mut u32_buf = vec![0; buf_len];
-    // SAFETY: This follows from the checked arithmetic above
-    unsafe {
-        assert_unchecked(u32_buf.len() >= 4 * control_tags_len);
+    let control_data_len = coder.data_len(control_tags);
+    if patch.len() < data_len || data_len < control_data_len {
+        return Err(io::Error::from(UnexpectedEof));
     }
-    let (controls, delta_pos) = u32_buf.split_at_mut(4 * control_tags_len);
+    let data = &patch[..data_len];
+    let (control_data, delta_data) = data.split_at(control_data_len);
 
-    // SAFETY: This follows from the checked arithmetic above
+    let mut u32_seq = vec![0; u32_seq_len];
+    let (control_seq, delta_pos) = u32_seq.split_at_mut(controls.div_ceil(4) * 12);
+    let controls_padded = controls.div_ceil(4) * 4;
+    // SAFETY: These follow from the checked arithmetic above
     unsafe {
-        assert_unchecked(controls.len() >= controls_len * 3);
         assert_unchecked(delta_pos.len() >= deltas_len);
+        assert_unchecked(control_seq.len() >= controls_padded * 2 + controls);
     }
-    let _ = coder.decode(control_tags, control_data, controls);
-    let controls = &controls[..controls_len * 3];
+
+    let _ = coder.decode(control_tags, control_data, control_seq);
     let _ = coder.decode_deltas(0, delta_tags, delta_data, delta_pos);
     for (idx, pos) in delta_pos.iter_mut().enumerate() {
         *pos = (*pos).wrapping_add(idx as u32);
     }
+    for seek in &mut control_seq[..controls_padded] {
+        let x = *seek;
+        *seek = (x >> 1) ^ (x & 1).wrapping_neg()
+    }
     let mut delta_pos = &delta_pos[..deltas_len];
+    let seeks = &control_seq[..controls];
+    let adds = &control_seq[controls_padded..][..controls];
+    let copies = &control_seq[controls_padded * 2..][..controls];
 
     let mut old_cursor: usize = 0;
     let mut copy_cursor: usize = 0;
 
-    for buffer in controls.chunks_exact(3) {
-        let control: BsdiffControl = (&AehobakControl::try_from(buffer).unwrap()).into();
-        let (add, copy) = (control.add as usize, control.copy as usize);
+    for (&add, (&copy, &seek)) in adds.iter().zip(copies.iter().zip(seeks)) {
+        let (add, copy, seek) = (add as usize, copy as usize, seek as i32 as i64);
         let old_slice = old
             .get(old_cursor..)
             .ok_or(io::Error::from(UnexpectedEof))?
@@ -152,7 +144,7 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
                     .ok_or(io::Error::from(InvalidData))?,
             )
             .map_err(|_| io::Error::from(InvalidData))?
-            .checked_add(control.seek)
+            .checked_add(seek)
             .ok_or(io::Error::from(InvalidData))?,
         )
         .map_err(|_| io::Error::from(InvalidData))?;

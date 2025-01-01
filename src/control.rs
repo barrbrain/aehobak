@@ -1,5 +1,5 @@
 /*-
- * Copyright 2024 David Michael Barr
+ * Copyright 2025 David Michael Barr
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted providing that the following conditions
@@ -111,11 +111,13 @@ impl TryFrom<&[u32]> for Aehobak {
 }
 
 impl Aehobak {
-    pub fn encode(&self, vbytes: &mut Vec<u32>) {
+    pub fn encode(&self, vbytes: (&mut Vec<u32>, &mut Vec<u32>, &mut Vec<u32>)) {
         fn to_u32(x: i32) -> u32 {
             ((x >> 31) ^ (x << 1)) as u32
         }
-        vbytes.extend([self.add, self.copy, to_u32(self.seek)]);
+        vbytes.0.push(self.add);
+        vbytes.1.push(self.copy);
+        vbytes.2.push(to_u32(self.seek));
     }
 }
 
@@ -135,8 +137,11 @@ mod tests {
 
         fn aehobak_round_trip(add: u32, copy: u32, seek: i32) -> bool {
             let reference = Aehobak { add, copy, seek};
-            let mut patch = Vec::new();
-            reference.encode(&mut patch);
+            let mut adds = Vec::new();
+            let mut copies = Vec::new();
+            let mut seeks = Vec::new();
+            reference.encode((&mut adds, &mut copies, &mut seeks));
+            let patch = [adds[0], copies[0], seeks[0]];
             let decoded: Aehobak = patch.as_slice().try_into().unwrap();
             decoded == reference
         }
