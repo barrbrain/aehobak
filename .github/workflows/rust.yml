@@ -23,4 +23,6 @@ jobs:
       - name: Clippy
         run: cargo clippy -- -D warnings
       - name: Bench
+        env:
+          RUSTFLAGS: '-C target-cpu=x86-64-v3'
         run: cargo bench
