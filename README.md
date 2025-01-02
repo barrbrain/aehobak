@@ -9,15 +9,15 @@
 Aehobak transcodes binary patches from [bsdiff](https://crates.io/crates/bsdiff).
 The goal is a byte-oriented format, compact and optimised for patch application speed.
 As compression efficiency is content-dependent, one should verify with a suitable corpus.
-The following results are for LZ4-compressed bsdiff patches of build artifacts that are **under 3%** of the target object size. The `bench` example can report the same metrics for provided files.
+The following results are for LZ4-compressed bsdiff patches of build artifacts that are **no larger than 3%** of the target object size. The `bench` example can report the same metrics for provided files.
 
-**LZ4-compressed aehobak** patches yield a median reduction of **50.8%**.
+**LZ4-compressed aehobak** patches yield a median reduction of **59.8%**.
 
 **Uncompressed aehobak** patches yield a median reduction of:
-- 38.1% over **LZ4-compressed bsdiff** patches
-- 98.9% over **uncompressed bsdiff** patches
+- 48.1% over **LZ4-compressed bsdiff** patches
+- 99.1% over **uncompressed bsdiff** patches
 
-Direct application of aehobak patches can achieve 70% of memcpy speed, while panic-free except for out-of-memory.
+Direct application of aehobak patches can achieve 79% of memcpy speed, while panic-free except for out-of-memory.
 
 ## Usage
 
@@ -58,7 +58,7 @@ fn diff_files(orig_file: &str, file: &str, patch_file: &str) -> std::io::Result<
 fn patch_file(orig_file: &str, patch_file: &str, file: &str) -> std::io::Result<()> {
     let old = std::fs::read(orig_file)?;
     let patch = std::fs::read(patch_file)?;
-    let mut new = Vec::new();
+    let mut new = Vec::with_capacity(10_000_000);
 
     aehobak::patch(&old, &patch, &mut new)?;
     std::fs::write(file, &new)

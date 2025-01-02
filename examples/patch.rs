@@ -10,7 +10,7 @@ fn main() {
 fn patch_file(orig_file: &str, patch_file: &str, file: &str) -> std::io::Result<()> {
     let old = std::fs::read(orig_file)?;
     let patch = std::fs::read(patch_file)?;
-    let mut new = Vec::new();
+    let mut new = Vec::with_capacity(10_000_000);
 
     aehobak::patch(&old, &patch, &mut new)?;
     std::fs::write(file, &new)
