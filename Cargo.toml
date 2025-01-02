@@ -10,7 +10,7 @@ license = "BSD-2-Clause"
 homepage = "https://lib.rs/aehobak"
 repository = "https://github.com/barrbrain/aehobak"
 edition = "2021"
-include = ["src/*.rs", "examples/*.rs", "LICENSE", "README.md", "Cargo.toml"]
+include = ["src/*.rs", "benches/*.rs", "examples/*.rs", "LICENSE", "README.md", "Cargo.toml"]
 
 [dependencies]
 streamvbyte64 = "0.2.0"
