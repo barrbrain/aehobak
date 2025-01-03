@@ -62,17 +62,18 @@ pub fn decode<T: Read>(reader: &mut T, patch: &mut Vec<u8>) -> io::Result<()> {
     let mut u32_seq = vec![0; 4 * tags_len];
     let _ = coder.decode(&tags, &data, &mut u32_seq);
     let controls_padded = controls.div_ceil(4) * 4;
-    let delta_pos = &mut u32_seq[controls_padded * 3..];
+    let deltas_padded = deltas_len.div_ceil(4) * 4;
+    let delta_pos = &mut u32_seq[controls_padded * 2..][..deltas_padded];
     let mut delta_cursor: u32 = 0;
     for skip in delta_pos {
         let pos = delta_cursor.wrapping_add(*skip);
         delta_cursor = delta_cursor.wrapping_add(*skip).wrapping_add(1);
         *skip = pos;
     }
-    let mut delta_pos = &u32_seq[controls_padded * 3..][..deltas_len];
-    let seeks = &u32_seq[..controls];
-    let adds = &u32_seq[controls_padded..][..controls];
-    let copies = &u32_seq[controls_padded * 2..][..controls];
+    let adds = &u32_seq[..controls];
+    let copies = &u32_seq[controls_padded..][..controls];
+    let mut delta_pos = &u32_seq[controls_padded * 2..][..deltas_len];
+    let seeks = &u32_seq[controls_padded * 2 + deltas_padded..][..controls];
 
     let mut literals = literals.as_slice();
     let mut delta_diffs = delta_diffs.as_slice();

@@ -11,7 +11,7 @@ The goal is a byte-oriented format, compact and optimised for patch application 
 As compression efficiency is content-dependent, one should verify with a suitable corpus.
 The following results are for LZ4-compressed bsdiff patches of build artifacts that are **no larger than 3%** of the target object size. The `bench` example can report the same metrics for provided files.
 
-**LZ4-compressed aehobak** patches yield a median reduction of **59.8%**.
+**LZ4-compressed aehobak** patches yield a median reduction of **74.9%**.
 
 **Uncompressed aehobak** patches yield a median reduction of:
 - 48.1% over **LZ4-compressed bsdiff** patches

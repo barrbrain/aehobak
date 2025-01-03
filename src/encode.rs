@@ -77,10 +77,10 @@ fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
     let padding = delta_skips.len().wrapping_neg() % 4;
     delta_skips.resize(delta_skips.len() + padding, 0);
 
-    let mut u32_seq = seeks;
-    u32_seq.extend(&adds);
+    let mut u32_seq = adds;
     u32_seq.extend(&copies);
     u32_seq.extend(&delta_skips);
+    u32_seq.extend(&seeks);
 
     let (tag_len, data_len) = Coder0124::max_compressed_bytes(u32_seq.len());
     let mut encoded = vec![0u8; tag_len + data_len];
@@ -104,9 +104,9 @@ fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
     };
 
     writer.write_all(&prefix[..prefix_len])?;
-    writer.write_all(&literals)?;
+    writer.write_all(&vec![0; literals.len()])?;
     writer.write_all(tags)?;
-    writer.write_all(&delta_diffs)?;
+    writer.write_all(&vec![0; delta_diffs.len()])?;
     writer.write_all(data)?;
 
     Ok(())
