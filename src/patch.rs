@@ -64,46 +64,62 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
     // SAFETY: This follows from the checked arithmetic above
     unsafe { assert_unchecked(u32_seq_len >= controls.div_ceil(4) * 12) }
 
-    let tags = patch
+    let mut tags = patch
         .get(..tags_len)
         .ok_or(io::Error::from(UnexpectedEof))?;
     patch = &patch[tags_len..];
-    let (control_tags, delta_tags) = tags.split_at(controls.div_ceil(4) * 3);
+    let (add_tags, copy_tags, delta_tags, seek_tags);
+    (add_tags, tags) = tags.split_at(controls.div_ceil(4));
+    (copy_tags, tags) = tags.split_at(controls.div_ceil(4));
+    (delta_tags, seek_tags) = tags.split_at(deltas_len.div_ceil(4));
 
     let mut delta_diffs = patch
         .get(..deltas_len)
         .ok_or(io::Error::from(UnexpectedEof))?;
     patch = &patch[deltas_len..];
 
-    let control_data_len = coder.data_len(control_tags);
-    if patch.len() < data_len || data_len < control_data_len {
+    let add_data_len = coder.data_len(add_tags);
+    let copy_data_len = coder.data_len(copy_tags);
+    let delta_data_len = coder.data_len(delta_tags);
+    if patch.len() < data_len {
         return Err(io::Error::from(UnexpectedEof));
     }
-    let data = &patch[..data_len];
-    let (control_data, delta_data) = data.split_at(control_data_len);
+    let mut data = &patch[..data_len];
+    let (add_data, copy_data, delta_data, seek_data);
+    (add_data, data) = data.split_at(add_data_len);
+    (copy_data, data) = data.split_at(copy_data_len);
+    (delta_data, seek_data) = data.split_at(delta_data_len);
 
     let mut u32_seq = vec![0; u32_seq_len];
-    let (control_seq, delta_pos) = u32_seq.split_at_mut(controls.div_ceil(4) * 12);
+    let mut u32_seq = u32_seq.as_mut_slice();
     let controls_padded = controls.div_ceil(4) * 4;
+    let (adds, copies, delta_pos, seeks);
+    (adds, u32_seq) = u32_seq.split_at_mut(controls_padded);
+    (copies, u32_seq) = u32_seq.split_at_mut(controls_padded);
+    (delta_pos, seeks) = u32_seq.split_at_mut(deltas_len.div_ceil(4) * 4);
     // SAFETY: These follow from the checked arithmetic above
     unsafe {
+        assert_unchecked(adds.len() >= controls);
+        assert_unchecked(copies.len() >= controls);
         assert_unchecked(delta_pos.len() >= deltas_len);
-        assert_unchecked(control_seq.len() >= controls_padded * 2 + controls);
+        assert_unchecked(seeks.len() >= controls);
     }
 
-    let _ = coder.decode(control_tags, control_data, control_seq);
+    let _ = coder.decode(add_tags, add_data, adds);
+    let _ = coder.decode(copy_tags, copy_data, copies);
     let _ = coder.decode_deltas(0, delta_tags, delta_data, delta_pos);
     for (idx, pos) in delta_pos.iter_mut().enumerate() {
         *pos = (*pos).wrapping_add(idx as u32);
     }
-    for seek in &mut control_seq[..controls_padded] {
+    let _ = coder.decode(seek_tags, seek_data, seeks);
+    for seek in &mut *seeks {
         let x = *seek;
         *seek = (x >> 1) ^ (x & 1).wrapping_neg()
     }
+    let adds = &adds[..controls];
+    let copies = &copies[..controls];
     let mut delta_pos = &delta_pos[..deltas_len];
-    let seeks = &control_seq[..controls];
-    let adds = &control_seq[controls_padded..][..controls];
-    let copies = &control_seq[controls_padded * 2..][..controls];
+    let seeks = &seeks[..controls];
 
     let mut old_cursor: usize = 0;
     let mut copy_cursor: usize = 0;
