@@ -68,7 +68,7 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
         .get(..tags_len)
         .ok_or(io::Error::from(UnexpectedEof))?;
     patch = &patch[tags_len..];
-    let (add_tags, copy_tags, delta_tags, seek_tags);
+    let (add_tags, copy_tags, mut delta_tags, seek_tags);
     (add_tags, tags) = tags.split_at(controls.div_ceil(4));
     (copy_tags, tags) = tags.split_at(controls.div_ceil(4));
     (delta_tags, seek_tags) = tags.split_at(deltas_len.div_ceil(4));
@@ -85,85 +85,92 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
         return Err(io::Error::from(UnexpectedEof));
     }
     let mut data = &patch[..data_len];
-    let (add_data, copy_data, delta_data, seek_data);
+    let (mut add_data, mut copy_data, mut delta_data, mut seek_data);
     (add_data, data) = data.split_at(add_data_len);
     (copy_data, data) = data.split_at(copy_data_len);
     (delta_data, seek_data) = data.split_at(delta_data_len);
 
-    let mut u32_seq = vec![0; u32_seq_len];
-    let mut u32_seq = u32_seq.as_mut_slice();
-    let controls_padded = controls.div_ceil(4) * 4;
-    let (adds, copies, delta_pos, seeks);
-    (adds, u32_seq) = u32_seq.split_at_mut(controls_padded);
-    (copies, u32_seq) = u32_seq.split_at_mut(controls_padded);
-    (delta_pos, seeks) = u32_seq.split_at_mut(deltas_len.div_ceil(4) * 4);
-    // SAFETY: These follow from the checked arithmetic above
-    unsafe {
-        assert_unchecked(adds.len() >= controls);
-        assert_unchecked(copies.len() >= controls);
-        assert_unchecked(delta_pos.len() >= deltas_len);
-        assert_unchecked(seeks.len() >= controls);
-    }
-
-    let _ = coder.decode(add_tags, add_data, adds);
-    let _ = coder.decode(copy_tags, copy_data, copies);
-    let _ = coder.decode_deltas(0, delta_tags, delta_data, delta_pos);
-    for (idx, pos) in delta_pos.iter_mut().enumerate() {
-        *pos = (*pos).wrapping_add(idx as u32);
-    }
-    let _ = coder.decode(seek_tags, seek_data, seeks);
-    for seek in &mut *seeks {
-        let x = *seek;
-        *seek = (x >> 1) ^ (x & 1).wrapping_neg()
-    }
-    let adds = &adds[..controls];
-    let copies = &copies[..controls];
-    let mut delta_pos = &delta_pos[..deltas_len];
-    let seeks = &seeks[..controls];
-
     let mut old_cursor: usize = 0;
     let mut copy_cursor: usize = 0;
 
-    for (&add, (&copy, &seek)) in adds.iter().zip(copies.iter().zip(seeks)) {
-        let (add, copy, seek) = (add as usize, copy as usize, seek as i32 as i64);
-        let old_slice = old
-            .get(old_cursor..)
-            .ok_or(io::Error::from(UnexpectedEof))?
-            .get(..add)
-            .ok_or(io::Error::from(UnexpectedEof))?;
-        if new.capacity().wrapping_sub(new.len()) < old_slice.len() {
-            Err(io::Error::from(UnexpectedEof))?;
+    let mut delta_pos_buf = [0; 4];
+    let mut delta_pos = &mut delta_pos_buf[..0];
+    let mut delta_base = 0;
+
+    for (add_tag, (copy_tag, seek_tag)) in add_tags.iter().zip(copy_tags.iter().zip(seek_tags)) {
+        let mut adds = [0; 4];
+        let mut copies = [0; 4];
+        let mut seeks = [0; 4];
+        let mut read;
+        read = coder.decode(std::slice::from_ref(add_tag), add_data, &mut adds);
+        add_data = &add_data[read..];
+        read = coder.decode(std::slice::from_ref(copy_tag), copy_data, &mut copies);
+        copy_data = &copy_data[read..];
+        read = coder.decode(std::slice::from_ref(seek_tag), seek_data, &mut seeks);
+        seek_data = &seek_data[read..];
+        for seek in &mut seeks {
+            let x = *seek;
+            *seek = (x >> 1) ^ (x & 1).wrapping_neg()
         }
-        new.extend_from_slice(old_slice);
-        let mut nonzero = delta_pos.len().min(delta_diffs.len());
-        for i in 0..nonzero {
-            let delta_cursor = copy_cursor.wrapping_add(delta_pos[i] as usize);
-            if delta_cursor >= new.len() {
-                nonzero = i;
-                break;
+        for (&add, (&copy, &seek)) in adds.iter().zip(copies.iter().zip(&seeks)) {
+            let (add, copy, seek) = (add as usize, copy as usize, seek as i32 as i64);
+            let old_slice = old
+                .get(old_cursor..)
+                .ok_or(io::Error::from(UnexpectedEof))?
+                .get(..add)
+                .ok_or(io::Error::from(UnexpectedEof))?;
+            if new.capacity().wrapping_sub(new.len()) < old_slice.len() {
+                Err(io::Error::from(UnexpectedEof))?;
             }
-            new[delta_cursor] = new[delta_cursor].wrapping_add(delta_diffs[i]);
-        }
-        delta_pos = &delta_pos[nonzero..];
-        delta_diffs = &delta_diffs[nonzero..];
-        let lit_slice = literals.get(..copy).ok_or(io::Error::from(UnexpectedEof))?;
-        if new.capacity().wrapping_sub(new.len()) < lit_slice.len() {
-            Err(io::Error::from(UnexpectedEof))?;
-        }
-        new.extend_from_slice(lit_slice);
-        literals = &literals[copy..];
-        copy_cursor = copy_cursor.wrapping_add(copy);
-        old_cursor = usize::try_from(
-            i64::try_from(
-                old_cursor
-                    .checked_add(add)
-                    .ok_or(io::Error::from(InvalidData))?,
+            new.extend_from_slice(old_slice);
+            'outer: while !delta_diffs.is_empty() {
+                if delta_pos.is_empty() {
+                    read = coder.decode_deltas(
+                        delta_base,
+                        &delta_tags[..1],
+                        delta_data,
+                        &mut delta_pos_buf,
+                    );
+                    delta_pos = &mut delta_pos_buf[..];
+                    for (idx, pos) in delta_pos.iter_mut().enumerate() {
+                        *pos = (*pos).wrapping_add(idx as u32);
+                    }
+                    delta_base = delta_pos[3] + 1;
+                    delta_data = &delta_data[read..];
+                    delta_tags = &delta_tags[1..];
+                }
+                let nonzero = delta_diffs.len().min(delta_pos.len());
+                for i in 0..nonzero {
+                    let delta_cursor = copy_cursor.wrapping_add(delta_pos[i] as usize);
+                    if delta_cursor >= new.len() {
+                        delta_pos = &mut delta_pos[i..];
+                        delta_diffs = &delta_diffs[i..];
+                        break 'outer;
+                    }
+                    new[delta_cursor] = new[delta_cursor].wrapping_add(delta_diffs[i]);
+                }
+                delta_pos = &mut delta_pos[nonzero..];
+                delta_diffs = &delta_diffs[nonzero..];
+            }
+            let lit_slice = literals.get(..copy).ok_or(io::Error::from(UnexpectedEof))?;
+            if new.capacity().wrapping_sub(new.len()) < lit_slice.len() {
+                Err(io::Error::from(UnexpectedEof))?;
+            }
+            new.extend_from_slice(lit_slice);
+            literals = &literals[copy..];
+            copy_cursor = copy_cursor.wrapping_add(copy);
+            old_cursor = usize::try_from(
+                i64::try_from(
+                    old_cursor
+                        .checked_add(add)
+                        .ok_or(io::Error::from(InvalidData))?,
+                )
+                .map_err(|_| io::Error::from(InvalidData))?
+                .checked_add(seek)
+                .ok_or(io::Error::from(InvalidData))?,
             )
-            .map_err(|_| io::Error::from(InvalidData))?
-            .checked_add(seek)
-            .ok_or(io::Error::from(InvalidData))?,
-        )
-        .map_err(|_| io::Error::from(InvalidData))?;
+            .map_err(|_| io::Error::from(InvalidData))?;
+        }
     }
     Ok(())
 }
