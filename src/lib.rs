@@ -34,12 +34,14 @@ pub use decode::decode;
 pub use encode::encode;
 pub use patch::patch;
 
+#[cfg(any(test, fuzzing))]
+use std::collections::LinkedList;
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use bsdiff;
     use quickcheck::quickcheck;
-    use std::collections::LinkedList;
 
     quickcheck! {
         fn round_trip(old: Vec<u8>, new: Vec<u8>) -> bool {
@@ -101,30 +103,46 @@ mod tests {
             }
         }
     }
+}
 
-    fn gen_bspatch(skeleton: LinkedList<(u8, u8, i8)>, period: u8) -> (Vec<u8>, usize, usize) {
-        use crate::control::{Aehobak, Bsdiff};
-        let mut bspatch = Vec::new();
-        let mut diffs = 0;
-        let mut old_len = 0;
-        let mut new_len = 0;
-        let mut cursor = 0;
-        for (add, copy, seek) in skeleton {
-            let (add, copy, seek) = (add as u32, copy as u32, seek as i32);
-            let seek = (seek << 1 ^ seek >> 31) as u32;
-            let control: Bsdiff =
-                (&Aehobak::try_from([add, copy, seek].as_slice()).unwrap()).into();
-            control.encode(&mut bspatch);
-            for _ in 0..add {
-                bspatch.push((diffs % (1 + period as usize) == 0) as u8);
-                diffs += 1;
+#[cfg(any(test, fuzzing))]
+pub fn gen_bspatch(skeleton: LinkedList<(u8, u8, i8)>, period: u8) -> (Vec<u8>, usize, usize) {
+    use crate::control::{Aehobak, Bsdiff};
+    const SCALE: [u32; 256] = {
+        let mut scale = [0; 256];
+        let mut pos = 255;
+        scale[pos] = (1 << 17) - 1;
+        while pos > 0 {
+            let prev = scale[pos] as u64;
+            pos -= 1;
+            scale[pos] = ((prev * 125451 + (1 << 16)) >> 17) as u32;
+            if scale[pos] < pos as u32 {
+                scale[pos] = pos as u32;
             }
-            cursor += add as usize;
-            old_len = old_len.max(cursor);
-            cursor = (cursor as i64 + seek as i64).max(0) as usize;
-            bspatch.resize(bspatch.len() + copy as usize, 0);
-            new_len += copy as usize + add as usize;
         }
-        (bspatch, old_len, new_len)
+        scale
+    };
+    let mut bspatch = Vec::new();
+    let mut diffs = 0;
+    let mut old_len = 0;
+    let mut new_len = 0;
+    let mut cursor = 0;
+    for (add, copy, seek) in skeleton {
+        let add = SCALE[add as usize];
+        let copy = SCALE[copy as usize];
+        let seek = seek.signum() as i32 * SCALE[(seek as isize).abs() as usize] as i32;
+        let seek = (seek << 1 ^ seek >> 31) as u32;
+        let control: Bsdiff = (&Aehobak::try_from([add, copy, seek].as_slice()).unwrap()).into();
+        control.encode(&mut bspatch);
+        for _ in 0..add {
+            bspatch.push((diffs % (1 + period as usize) == 0) as u8);
+            diffs += 1;
+        }
+        cursor += add as usize;
+        old_len = old_len.max(cursor);
+        cursor = (cursor as i64 + seek as i64).max(0) as usize;
+        bspatch.resize(bspatch.len() + copy as usize, 0);
+        new_len += copy as usize + add as usize;
     }
+    (bspatch, old_len, new_len)
 }

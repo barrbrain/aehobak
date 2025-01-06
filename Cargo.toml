@@ -21,6 +21,9 @@ criterion = "0.5.1"
 lz4_flex = "0.11.3"
 quickcheck = "1.0.3"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
+
 [[bench]]
 name = "patch"
 harness = false

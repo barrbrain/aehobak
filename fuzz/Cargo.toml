@@ -1,0 +1,23 @@
+[package]
+name = "aehobak-fuzz"
+version = "0.0.0"
+publish = false
+license = "BSD-2-Clause"
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bsdiff = "0.2.0"
+
+[dependencies.aehobak]
+path = ".."
+
+[[bin]]
+name = "patch"
+path = "fuzz_targets/patch.rs"
+test = false
+doc = false
+bench = false
