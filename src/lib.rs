@@ -92,7 +92,11 @@ mod tests {
             match patch(&old, &encoded, &mut result) {
                 Err(e) if e.kind() == InvalidData => true,
                 Err(e) if e.kind() == UnexpectedEof => true,
-                Ok(_) => true,
+                Ok(_) => {
+                    let mut reference = Vec::new();
+                    bsdiff::patch(&old, &mut bspatch.as_slice(), &mut reference).unwrap();
+                    reference == result
+                }
                 _ => false,
             }
         }
