@@ -36,14 +36,18 @@ pub use diff::diff;
 pub use encode::encode;
 pub use patch::patch;
 
+#[cfg(any(test, fuzzing))]
+use rand_xoshiro::rand_core::{RngCore, SeedableRng};
+#[cfg(any(test, fuzzing))]
+use rand_xoshiro::Xoshiro256Plus;
+#[cfg(any(test, fuzzing))]
+use std::collections::LinkedList;
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use bsdiff;
     use quickcheck::{quickcheck, TestResult};
-    use rand_xoshiro::rand_core::{RngCore, SeedableRng};
-    use rand_xoshiro::Xoshiro256Plus;
-    use std::collections::LinkedList;
 
     quickcheck! {
         fn round_trip(old: Vec<u8>, new: Vec<u8>) -> bool {
@@ -208,53 +212,54 @@ mod tests {
         decode(&mut encoded.as_slice(), &mut decoded).unwrap();
         assert!(decoded == bspatch)
     }
+}
 
-    fn gen_old_new(
-        skeleton: LinkedList<(u8, u8, i8)>,
-        period: u8,
-        phase: u8,
-    ) -> Option<(Vec<u8>, Vec<u8>)> {
-        let (bspatch, old_len, new_len) = gen_bspatch(skeleton, period, phase);
-        let mut new = Vec::with_capacity(new_len);
-        let mut old = vec![0; old_len];
-        let mut rng = Xoshiro256Plus::seed_from_u64(0xeba2fa67e5a81121);
-        rng.fill_bytes(&mut old);
-        if bsdiff::patch(&old, &mut bspatch.as_slice(), &mut new).is_err() {
-            return None;
-        }
-        Some((old, new))
+#[cfg(any(test, fuzzing))]
+pub fn gen_old_new(
+    skeleton: LinkedList<(u8, u8, i8)>,
+    period: u8,
+    phase: u8,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let (bspatch, old_len, new_len) = gen_bspatch(skeleton, period, phase);
+    let mut new = Vec::with_capacity(new_len);
+    let mut old = vec![0; old_len];
+    let mut rng = Xoshiro256Plus::seed_from_u64(0xeba2fa67e5a81121);
+    rng.fill_bytes(&mut old);
+    if bsdiff::patch(&old, &mut bspatch.as_slice(), &mut new).is_err() {
+        return None;
     }
+    Some((old, new))
+}
 
-    fn gen_bspatch(
-        skeleton: LinkedList<(u8, u8, i8)>,
-        period: u8,
-        phase: u8,
-    ) -> (Vec<u8>, usize, usize) {
-        use crate::control::{Aehobak, Bsdiff};
-        let mut bspatch = Vec::new();
-        let mut diffs = phase as usize;
-        let mut old_len = 0;
-        let mut new_len = 0;
-        let mut cursor = 0;
-        let mut rng = Xoshiro256Plus::seed_from_u64(0x75efdb1b26806fd8);
-        for (add, copy, seek) in skeleton {
-            let (add, copy, seek) = (add as u32, copy as u32, seek as i32);
-            let seek = (seek << 1 ^ seek >> 31) as u32;
-            let control: Bsdiff =
-                (&Aehobak::try_from([add, copy, seek].as_slice()).unwrap()).into();
-            control.encode(&mut bspatch);
-            for _ in 0..add {
-                bspatch.push((diffs % (1 + period as usize) == 0) as u8);
-                diffs += 1;
-            }
-            cursor += add as usize;
-            old_len = old_len.max(cursor);
-            cursor = (cursor as i64 + seek as i64).max(0) as usize;
-            let bspatch_len = bspatch.len();
-            bspatch.resize(bspatch_len + copy as usize, 0);
-            rng.fill_bytes(&mut bspatch[bspatch_len..]);
-            new_len += copy as usize + add as usize;
+#[cfg(any(test, fuzzing))]
+pub fn gen_bspatch(
+    skeleton: LinkedList<(u8, u8, i8)>,
+    period: u8,
+    phase: u8,
+) -> (Vec<u8>, usize, usize) {
+    use crate::control::{Aehobak, Bsdiff};
+    let mut bspatch = Vec::new();
+    let mut diffs = phase as usize;
+    let mut old_len = 0;
+    let mut new_len = 0;
+    let mut cursor = 0;
+    let mut rng = Xoshiro256Plus::seed_from_u64(0x75efdb1b26806fd8);
+    for (add, copy, seek) in skeleton {
+        let (add, copy, seek) = (add as u32, copy as u32, seek as i32);
+        let seek = (seek << 1 ^ seek >> 31) as u32;
+        let control: Bsdiff = (&Aehobak::try_from([add, copy, seek].as_slice()).unwrap()).into();
+        control.encode(&mut bspatch);
+        for _ in 0..add {
+            bspatch.push((diffs % (1 + period as usize) == 0) as u8);
+            diffs += 1;
         }
-        (bspatch, old_len, new_len)
+        cursor += add as usize;
+        old_len = old_len.max(cursor);
+        cursor = (cursor as i64 + seek as i64).max(0) as usize;
+        let bspatch_len = bspatch.len();
+        bspatch.resize(bspatch_len + copy as usize, 0);
+        rng.fill_bytes(&mut bspatch[bspatch_len..]);
+        new_len += copy as usize + add as usize;
     }
+    (bspatch, old_len, new_len)
 }
