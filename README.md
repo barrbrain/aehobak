@@ -17,7 +17,7 @@ The following results are for LZ4-compressed bsdiff patches of build artifacts t
 - 48.1% over **LZ4-compressed bsdiff** patches
 - 99.1% over **uncompressed bsdiff** patches
 
-Direct application of aehobak patches can achieve 79% of memcpy speed, while panic-free except for out-of-memory.
+Direct application of aehobak patches can achieve **75% of memcpy speed** and is panic-free.
 
 ## Usage
 
