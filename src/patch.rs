@@ -81,7 +81,17 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
     let add_data_len = coder.data_len(add_tags);
     let copy_data_len = coder.data_len(copy_tags);
     let delta_data_len = coder.data_len(delta_tags);
-    if patch.len() < data_len {
+    let seek_data_len = coder.data_len(seek_tags);
+    if patch.len() < data_len
+        || add_data_len
+            .checked_add(copy_data_len)
+            .ok_or(io::Error::from(InvalidData))?
+            .checked_add(delta_data_len)
+            .ok_or(io::Error::from(InvalidData))?
+            .checked_add(seek_data_len)
+            .ok_or(io::Error::from(InvalidData))?
+            > data_len
+    {
         return Err(io::Error::from(UnexpectedEof));
     }
     let mut data = &patch[..data_len];
@@ -115,6 +125,8 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
             &window[..]
         };
         read = coder.decode(tags, add_data, &mut adds);
+        // SAFETY: This follows from the checked arithmetic above
+        unsafe { assert_unchecked(read <= add_data.len()) }
         add_data = &add_data[read..];
         tags = if copy_tags.len() >= 8 {
             copy_tags
@@ -124,6 +136,8 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
             &window[..]
         };
         read = coder.decode(tags, copy_data, &mut copies);
+        // SAFETY: This follows from the checked arithmetic above
+        unsafe { assert_unchecked(read <= copy_data.len()) }
         copy_data = &copy_data[read..];
         tags = if seek_tags.len() >= 8 {
             seek_tags
@@ -133,6 +147,8 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
             &window[..]
         };
         read = coder.decode(tags, seek_data, &mut seeks);
+        // SAFETY: This follows from the checked arithmetic above
+        unsafe { assert_unchecked(read <= seek_data.len()) }
         seek_data = &seek_data[read..];
         for seek in &mut seeks {
             let x = *seek;
@@ -162,11 +178,13 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
                         &window[..]
                     };
                     read = coder.decode_deltas(delta_base, tags, delta_data, &mut delta_pos_buf);
+                    // SAFETY: This follows from the checked arithmetic above
+                    unsafe { assert_unchecked(read <= delta_data.len()) }
                     delta_pos = &mut delta_pos_buf[..];
                     for (idx, pos) in delta_pos.iter_mut().enumerate() {
                         *pos = (*pos).wrapping_add(idx as u32);
                     }
-                    delta_base = delta_pos[31] + 1;
+                    delta_base = delta_pos.last().unwrap() + 1;
                     delta_data = &delta_data[read..];
                 }
                 let nonzero = delta_diffs.len().min(delta_pos.len());
