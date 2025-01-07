@@ -93,20 +93,46 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
     let mut old_cursor: usize = 0;
     let mut copy_cursor: usize = 0;
 
-    let mut delta_pos_buf = [0; 4];
+    let mut window;
+    let mut delta_pos_buf = [0; 32];
     let mut delta_pos = &mut delta_pos_buf[..0];
     let mut delta_base = 0;
 
-    for (add_tag, (copy_tag, seek_tag)) in add_tags.iter().zip(copy_tags.iter().zip(seek_tags)) {
-        let mut adds = [0; 4];
-        let mut copies = [0; 4];
-        let mut seeks = [0; 4];
+    for (add_tags, (copy_tags, seek_tags)) in add_tags
+        .chunks(8)
+        .zip(copy_tags.chunks(8).zip(seek_tags.chunks(8)))
+    {
+        let mut adds = [0; 32];
+        let mut copies = [0; 32];
+        let mut seeks = [0; 32];
         let mut read;
-        read = coder.decode(std::slice::from_ref(add_tag), add_data, &mut adds);
+        let mut tags;
+        tags = if add_tags.len() >= 8 {
+            add_tags
+        } else {
+            window = [0; 8];
+            window[..add_tags.len()].copy_from_slice(add_tags);
+            &window[..]
+        };
+        read = coder.decode(tags, add_data, &mut adds);
         add_data = &add_data[read..];
-        read = coder.decode(std::slice::from_ref(copy_tag), copy_data, &mut copies);
+        tags = if copy_tags.len() >= 8 {
+            copy_tags
+        } else {
+            window = [0; 8];
+            window[..copy_tags.len()].copy_from_slice(copy_tags);
+            &window[..]
+        };
+        read = coder.decode(tags, copy_data, &mut copies);
         copy_data = &copy_data[read..];
-        read = coder.decode(std::slice::from_ref(seek_tag), seek_data, &mut seeks);
+        tags = if seek_tags.len() >= 8 {
+            seek_tags
+        } else {
+            window = [0; 8];
+            window[..seek_tags.len()].copy_from_slice(seek_tags);
+            &window[..]
+        };
+        read = coder.decode(tags, seek_data, &mut seeks);
         seek_data = &seek_data[read..];
         for seek in &mut seeks {
             let x = *seek;
@@ -125,19 +151,23 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
             new.extend_from_slice(old_slice);
             'outer: while !delta_diffs.is_empty() {
                 if delta_pos.is_empty() {
-                    read = coder.decode_deltas(
-                        delta_base,
-                        &delta_tags[..1],
-                        delta_data,
-                        &mut delta_pos_buf,
-                    );
+                    tags = if delta_tags.len() >= 8 {
+                        let window = &delta_tags[..8];
+                        delta_tags = &delta_tags[8..];
+                        window
+                    } else {
+                        window = [0; 8];
+                        window[..delta_tags.len()].copy_from_slice(delta_tags);
+                        delta_tags = &delta_tags[delta_tags.len()..];
+                        &window[..]
+                    };
+                    read = coder.decode_deltas(delta_base, tags, delta_data, &mut delta_pos_buf);
                     delta_pos = &mut delta_pos_buf[..];
                     for (idx, pos) in delta_pos.iter_mut().enumerate() {
                         *pos = (*pos).wrapping_add(idx as u32);
                     }
-                    delta_base = delta_pos[3] + 1;
+                    delta_base = delta_pos[31] + 1;
                     delta_data = &delta_data[read..];
-                    delta_tags = &delta_tags[1..];
                 }
                 let nonzero = delta_diffs.len().min(delta_pos.len());
                 for i in 0..nonzero {
