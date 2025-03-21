@@ -27,7 +27,7 @@ use crate::control::Aehobak as AehobakControl;
 use crate::control::Bsdiff as BsdiffControl;
 use std::io;
 use std::io::Write;
-use streamvbyte64::{Coder, Coder0124};
+use streamvbyte64::{Coder, Coder0124, Coder1234};
 
 /// Encode bsdiff output, returning a compact representation.
 pub fn encode<T: Write>(patch: &[u8], writer: &mut T) -> io::Result<()> {
@@ -67,6 +67,7 @@ fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
     }
 
     let coder = Coder0124::new();
+    let coder1 = Coder1234::new();
 
     let controls = adds.len();
     let padding = controls.wrapping_neg() % 4;
@@ -77,15 +78,43 @@ fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
     let padding = delta_skips.len().wrapping_neg() % 4;
     delta_skips.resize(delta_skips.len() + padding, 0);
 
-    let mut u32_seq = adds;
-    u32_seq.extend(&copies);
-    u32_seq.extend(&delta_skips);
-    u32_seq.extend(&seeks);
+    let (tag_len, data_len) = {
+        let (tag0_len, data0_len) =
+            Coder0124::max_compressed_bytes(copies.len() + delta_skips.len());
+        let (tag1_len, data1_len) = Coder1234::max_compressed_bytes(adds.len() + seeks.len());
+        (tag0_len + tag1_len, data0_len + data1_len)
+    };
 
-    let (tag_len, data_len) = Coder0124::max_compressed_bytes(u32_seq.len());
     let mut encoded = vec![0u8; tag_len + data_len];
-    let (tags, data) = encoded.split_at_mut(tag_len);
-    let data_len = coder.encode(&u32_seq, tags, data);
+    let data_len = {
+        let mut data_len_sum = 0;
+        let (tags, data) = encoded.split_at_mut(tag_len);
+
+        let (tag_len, data_len) = Coder1234::max_compressed_bytes(seeks.len());
+        let data_len = coder1.encode(&seeks, &mut tags[..tag_len], &mut data[..data_len]);
+        let tags = &mut tags[tag_len..];
+        let data = &mut data[data_len..];
+        data_len_sum += data_len;
+
+        let (tag_len, data_len) = Coder0124::max_compressed_bytes(delta_skips.len());
+        let data_len = coder.encode(&delta_skips, &mut tags[..tag_len], &mut data[..data_len]);
+        let tags = &mut tags[tag_len..];
+        let data = &mut data[data_len..];
+        data_len_sum += data_len;
+
+        let (tag_len, data_len) = Coder0124::max_compressed_bytes(copies.len());
+        let data_len = coder.encode(&copies, &mut tags[..tag_len], &mut data[..data_len]);
+        let tags = &mut tags[tag_len..];
+        let data = &mut data[data_len..];
+        data_len_sum += data_len;
+
+        let (tag_len, data_len) = Coder1234::max_compressed_bytes(adds.len());
+        let data_len = coder1.encode(&adds, &mut tags[..tag_len], &mut data[..data_len]);
+        data_len_sum += data_len;
+
+        data_len_sum
+    };
+    let (tags, data) = encoded.split_at(tag_len);
     let data = &data[..data_len];
 
     let mut prefix = [0u8; 17];
