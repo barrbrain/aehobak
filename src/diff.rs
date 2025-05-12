@@ -73,8 +73,8 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> Result<()> {
 const BLOCK: usize = 1 << 13;
 
 fn sais(old: &[u8]) -> Result<Box<[u16]>> {
+    use crate::libsais::libsais;
     use core::ptr::null_mut;
-    use libsais_sys::libsais::libsais;
     ensure!(old.len() <= i32::MAX as usize, "input too large");
     let mut sa: Vec<u16> = Vec::with_capacity(old.len());
     let mut tmp: Vec<i32> = Vec::with_capacity(old.len().min(BLOCK));

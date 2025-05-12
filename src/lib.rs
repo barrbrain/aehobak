@@ -30,6 +30,7 @@ mod decode;
 mod diff;
 mod encode;
 mod patch;
+mod libsais;
 
 pub use decode::decode;
 pub use diff::diff;
