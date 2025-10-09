@@ -82,7 +82,6 @@ impl EncoderState {
         control.encode((&mut self.adds, &mut self.copies, &mut self.seeks));
     }
 
-    #[allow(unused)]
     pub fn add(&mut self, old: &[u8], new: &[u8]) {
         let add = old.len();
         assert_eq!(add, new.len());
