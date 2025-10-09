@@ -27,10 +27,12 @@
 
 mod control;
 mod decode;
+mod diff;
 mod encode;
 mod patch;
 
 pub use decode::decode;
+pub use diff::diff;
 pub use encode::encode;
 pub use patch::patch;
 
@@ -80,6 +82,21 @@ mod tests {
             encode(&bspatch, &mut encoded).unwrap();
             patch(&old, &encoded, &mut result).unwrap();
             result == new
+        }
+
+        fn direct_diff(old: Vec<u8>, idx: usize) -> bool {
+            let mut new = old.clone();
+            if !new.is_empty() {
+                let idx = idx % new.len();
+                new[idx] = new[idx].wrapping_add(1);
+            }
+            let mut bspatch = Vec::new();
+            let mut encoded = Vec::new();
+            let mut patch = Vec::with_capacity(new.len());
+            bsdiff::diff(&old, &new, &mut bspatch).unwrap();
+            encode(&bspatch, &mut encoded).unwrap();
+            diff(&old, &new, &mut patch).unwrap();
+            patch == encoded
         }
 
         fn arbitrary_patch(skeleton: LinkedList<(u8,u8,i8)>, period: u8) -> bool {
