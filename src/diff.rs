@@ -78,43 +78,65 @@ fn find_best_match(mut sa: &[i32], old: &[u8], new: &[u8]) -> (usize, usize) {
     }
 }
 
-fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> io::Result<()> {
+struct ScanState<'a> {
+    sa: &'a [i32],
+    old: &'a [u8],
+    new: &'a [u8],
+    scan: usize,
+    len: usize,
+    pos: usize,
+    last_scan: usize,
+    last_pos: usize,
+    last_offset: i32,
+}
+
+fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn std::io::Write) -> std::io::Result<()> {
     let mut sa = vec![0; old.len() + 1];
     sais(&mut sa, &mut vec![0; old.len() + 1], old);
+    let sa = &sa;
+
+    let mut scanner = ScanState {
+        sa,
+        old,
+        new,
+        scan: 0,
+        len: 0,
+        pos: 0,
+        last_scan: 0,
+        last_pos: 0,
+        last_offset: 0,
+    };
 
     let mut encoder = EncoderState::new();
 
-    let mut scan = 0;
-    let mut len = 0usize;
-    let mut pos = 0usize;
-    let mut last_scan = 0;
-    let mut last_pos = 0;
-    let mut last_offset = 0i32;
-    while scan < new.len() {
+    while scanner.scan < scanner.new.len() {
         let mut old_score = 0;
-        scan += len;
-        let mut scsc = scan;
-        while scan < new.len() {
-            (pos, len) = find_best_match(&sa, old, &new[scan..]);
-            while scsc < scan + len {
-                if scsc as i32 + last_offset < old.len() as _
-                    && (old[(scsc as i32 + last_offset) as usize] == new[scsc])
+        scanner.scan += scanner.len;
+        let mut scsc = scanner.scan;
+        while scanner.scan < scanner.new.len() {
+            (scanner.pos, scanner.len) =
+                find_best_match(&scanner.sa, scanner.old, &scanner.new[scanner.scan..]);
+            while scsc < scanner.scan + scanner.len {
+                if scsc as i32 + scanner.last_offset < scanner.old.len() as _
+                    && (scanner.old[(scsc as i32 + scanner.last_offset) as usize]
+                        == scanner.new[scsc])
                 {
                     old_score += 1;
                 }
                 scsc += 1;
             }
-            if len == old_score && (len != 0) || len > old_score + 8 {
+            if scanner.len == old_score && (scanner.len != 0) || scanner.len > old_score + 8 {
                 break;
             }
-            if scan as i32 + last_offset < old.len() as _
-                && (old[(scan as i32 + last_offset) as usize] == new[scan])
+            if scanner.scan as i32 + scanner.last_offset < scanner.old.len() as _
+                && (scanner.old[(scanner.scan as i32 + scanner.last_offset) as usize]
+                    == scanner.new[scanner.scan])
             {
                 old_score -= 1;
             }
-            scan += 1;
+            scanner.scan += 1;
         }
-        if !(len != old_score || scan == new.len()) {
+        if !(scanner.len != old_score || scanner.scan == scanner.new.len()) {
             continue;
         }
         let mut add = 0usize;
@@ -122,8 +144,10 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> io::Result<(
             let mut score = 0;
             let mut best = 0;
             let mut i = 0usize;
-            while last_scan + i < scan && (last_pos + i < old.len() as _) {
-                if old[last_pos + i] == new[last_scan + i] {
+            while scanner.last_scan + i < scanner.scan
+                && (scanner.last_pos + i < scanner.old.len() as _)
+            {
+                if scanner.old[scanner.last_pos + i] == scanner.new[scanner.last_scan + i] {
                     score += 1;
                 }
                 i += 1;
@@ -135,12 +159,12 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> io::Result<(
             }
         }
         let mut lenb = 0;
-        if scan < new.len() {
+        if scanner.scan < scanner.new.len() {
             let mut score = 0i32;
             let mut best = 0;
             let mut i = 1;
-            while scan >= last_scan + i && (pos >= i) {
-                if old[pos - i] == new[scan - i] {
+            while scanner.scan >= scanner.last_scan + i && (scanner.pos >= i) {
+                if scanner.old[scanner.pos - i] == scanner.new[scanner.scan - i] {
                     score += 1;
                 }
                 if score * 2 - i as i32 > best * 2 - lenb as i32 {
@@ -150,16 +174,18 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> io::Result<(
                 i += 1;
             }
         }
-        if last_scan + add > scan - lenb {
-            let overlap = last_scan + add - (scan - lenb);
+        if scanner.last_scan + add > scanner.scan - lenb {
+            let overlap = scanner.last_scan + add - (scanner.scan - lenb);
             let mut score = 0;
             let mut best = 0;
             let mut lens = 0;
             for i in 0..overlap {
-                if new[last_scan + add - overlap + i] == old[last_pos + add - overlap + i] {
+                if scanner.new[scanner.last_scan + add - overlap + i]
+                    == scanner.old[scanner.last_pos + add - overlap + i]
+                {
                     score += 1;
                 }
-                if new[scan - lenb + i] == old[pos - lenb + i] {
+                if scanner.new[scanner.scan - lenb + i] == scanner.old[scanner.pos - lenb + i] {
                     score -= 1;
                 }
                 if score > best {
@@ -170,22 +196,25 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> io::Result<(
             add = add + lens - overlap;
             lenb -= lens;
         }
-        let copy = scan - lenb - (last_scan + add);
-        let seek = (pos - last_pos) as isize - (lenb + add) as isize;
+        let copy = scanner.scan - lenb - (scanner.last_scan + add);
+        let seek = (scanner.pos - scanner.last_pos) as isize - (lenb + add) as isize;
         encoder.control(Aehobak {
             add: add as u32,
             copy: copy as u32,
             seek: seek as i32,
         });
 
-        encoder.add(&old[last_pos..][..add], &new[last_scan..][..add]);
+        encoder.add(
+            &scanner.old[scanner.last_pos..][..add],
+            &scanner.new[scanner.last_scan..][..add],
+        );
 
-        let copy_from = last_scan + add;
-        encoder.copy(&new[copy_from..][..copy]);
+        let copy_from = scanner.last_scan + add;
+        encoder.copy(&scanner.new[copy_from..][..copy]);
 
-        last_scan = scan - lenb;
-        last_pos = pos - lenb;
-        last_offset = pos as i32 - scan as i32;
+        scanner.last_scan = scanner.scan - lenb;
+        scanner.last_pos = scanner.pos - lenb;
+        scanner.last_offset = scanner.pos as i32 - scanner.scan as i32;
     }
 
     encoder.finalize(writer)
