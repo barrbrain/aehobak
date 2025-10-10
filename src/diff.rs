@@ -34,6 +34,35 @@ pub fn diff<T: Write>(old: &[u8], new: &[u8], writer: &mut T) -> io::Result<()> 
     diff_internal(old, new, writer)
 }
 
+fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn std::io::Write) -> std::io::Result<()> {
+    let mut sa = vec![0; old.len() + 1];
+    sais(&mut sa, &mut vec![0; old.len() + 1], old);
+    let mut scanner = ScanState::new(old, new, &sa);
+    let mut encoder = EncoderState::new();
+
+    while !scanner.done() {
+        if !scanner.advance() {
+            continue;
+        }
+        let mut add = scanner.calc_add();
+        let mut back = scanner.calc_back();
+        (add, back) = scanner.optimize_overlap(add, back);
+        let (copy, seek) = scanner.calc_copy_seek(add, back);
+        encoder.control(Aehobak {
+            add: add as u32,
+            copy: copy as u32,
+            seek: seek as i32,
+        });
+        encoder.add(
+            &scanner.old[scanner.last_pos..][..add],
+            &scanner.new[scanner.last_scan..][..add],
+        );
+        encoder.copy(&scanner.new[scanner.last_scan + add..][..copy]);
+        scanner.commit(back);
+    }
+    encoder.finalize(writer)
+}
+
 fn sais(sa: &mut [i32], tmp: &mut [u16], old: &[u8]) {
     use core::ptr::null_mut;
     use libsais_sys::libsais16::libsais16;
@@ -57,27 +86,6 @@ fn mismatch(old: &[u8], new: &[u8]) -> usize {
     old.iter().zip(new).take_while(|(a, b)| a == b).count()
 }
 
-fn find_best_match(mut sa: &[i32], old: &[u8], new: &[u8]) -> (usize, usize) {
-    while sa.len() > 2 {
-        let pos = (sa.len() - 1) / 2;
-        let old = &old[sa[pos] as usize..];
-        let len = old.len().min(new.len());
-        sa = if old[..len] < new[..len] {
-            &sa[pos..]
-        } else {
-            &sa[..=pos]
-        };
-    }
-    assert!(!sa.is_empty());
-    let a = mismatch(&old[sa[0] as usize..], new);
-    let b = mismatch(&old[sa[sa.len() - 1] as usize..], new);
-    if a > b {
-        (sa[0] as usize, a)
-    } else {
-        (sa[sa.len() - 1] as usize, b)
-    }
-}
-
 struct ScanState<'a> {
     sa: &'a [i32],
     old: &'a [u8],
@@ -87,135 +95,155 @@ struct ScanState<'a> {
     pos: usize,
     last_scan: usize,
     last_pos: usize,
-    last_offset: i32,
+    last_offset: isize,
 }
 
-fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn std::io::Write) -> std::io::Result<()> {
-    let mut sa = vec![0; old.len() + 1];
-    sais(&mut sa, &mut vec![0; old.len() + 1], old);
-    let sa = &sa;
+impl<'a> ScanState<'a> {
+    fn new(old: &'a [u8], new: &'a [u8], sa: &'a [i32]) -> Self {
+        Self {
+            sa,
+            old,
+            new,
+            scan: 0,
+            len: 0,
+            pos: 0,
+            last_scan: 0,
+            last_pos: 0,
+            last_offset: 0,
+        }
+    }
 
-    let mut scanner = ScanState {
-        sa,
-        old,
-        new,
-        scan: 0,
-        len: 0,
-        pos: 0,
-        last_scan: 0,
-        last_pos: 0,
-        last_offset: 0,
-    };
+    fn done(&self) -> bool {
+        self.scan >= self.new.len()
+    }
 
-    let mut encoder = EncoderState::new();
+    fn find_best_match(&self) -> (usize, usize) {
+        let mut sa = self.sa;
+        let old = self.old;
+        let new = &self.new[self.scan..];
+        while sa.len() > 2 {
+            let pos = (sa.len() - 1) / 2;
+            let old = &self.old[sa[pos] as usize..];
+            let len = old.len().min(new.len());
+            sa = if old[..len] < new[..len] {
+                &sa[pos..]
+            } else {
+                &sa[..=pos]
+            };
+        }
+        assert!(!sa.is_empty());
+        let a = mismatch(&old[sa[0] as usize..], new);
+        let b = mismatch(&old[sa[sa.len() - 1] as usize..], new);
+        if a > b {
+            (sa[0] as usize, a)
+        } else {
+            (sa[sa.len() - 1] as usize, b)
+        }
+    }
 
-    while scanner.scan < scanner.new.len() {
-        let mut old_score = 0;
-        scanner.scan += scanner.len;
-        let mut scsc = scanner.scan;
-        while scanner.scan < scanner.new.len() {
-            (scanner.pos, scanner.len) =
-                find_best_match(&scanner.sa, scanner.old, &scanner.new[scanner.scan..]);
-            while scsc < scanner.scan + scanner.len {
-                if scsc as i32 + scanner.last_offset < scanner.old.len() as _
-                    && (scanner.old[(scsc as i32 + scanner.last_offset) as usize]
-                        == scanner.new[scsc])
+    fn advance(&mut self) -> bool {
+        let mut score = 0;
+        self.scan += self.len;
+        let mut subscan = self.scan;
+        while self.scan < self.new.len() {
+            (self.pos, self.len) = self.find_best_match();
+            while subscan < self.scan + self.len {
+                if subscan as isize + self.last_offset < self.old.len() as isize
+                    && (self.old[(subscan as isize + self.last_offset) as usize]
+                        == self.new[subscan])
                 {
-                    old_score += 1;
-                }
-                scsc += 1;
-            }
-            if scanner.len == old_score && (scanner.len != 0) || scanner.len > old_score + 8 {
-                break;
-            }
-            if scanner.scan as i32 + scanner.last_offset < scanner.old.len() as _
-                && (scanner.old[(scanner.scan as i32 + scanner.last_offset) as usize]
-                    == scanner.new[scanner.scan])
-            {
-                old_score -= 1;
-            }
-            scanner.scan += 1;
-        }
-        if !(scanner.len != old_score || scanner.scan == scanner.new.len()) {
-            continue;
-        }
-        let mut add = 0usize;
-        {
-            let mut score = 0;
-            let mut best = 0;
-            let mut i = 0usize;
-            while scanner.last_scan + i < scanner.scan
-                && (scanner.last_pos + i < scanner.old.len() as _)
-            {
-                if scanner.old[scanner.last_pos + i] == scanner.new[scanner.last_scan + i] {
                     score += 1;
                 }
-                i += 1;
-                if score * 2 - i as i32 <= best * 2 - add as i32 {
-                    continue;
-                }
+                subscan += 1;
+            }
+            if (self.len == score && self.len != 0) || self.len > score + 8 {
+                break;
+            }
+            if self.scan as isize + self.last_offset < self.old.len() as isize
+                && (self.old[(self.scan as isize + self.last_offset) as usize]
+                    == self.new[self.scan])
+            {
+                score -= 1;
+            }
+            self.scan += 1;
+        }
+        self.len != score || self.scan == self.new.len()
+    }
+
+    fn calc_add(&self) -> usize {
+        let mut add = 0;
+        let mut score = 0;
+        let mut best = 0;
+        let mut i = 0;
+        while self.last_scan + i < self.scan && self.last_pos + i < self.old.len() {
+            if self.old[self.last_pos + i] == self.new[self.last_scan + i] {
+                score += 1;
+            }
+            i += 1;
+            if score * 2 - i as i32 > best * 2 - add as i32 {
                 best = score;
                 add = i;
             }
         }
-        let mut lenb = 0;
-        if scanner.scan < scanner.new.len() {
-            let mut score = 0i32;
-            let mut best = 0;
-            let mut i = 1;
-            while scanner.scan >= scanner.last_scan + i && (scanner.pos >= i) {
-                if scanner.old[scanner.pos - i] == scanner.new[scanner.scan - i] {
-                    score += 1;
-                }
-                if score * 2 - i as i32 > best * 2 - lenb as i32 {
-                    best = score;
-                    lenb = i;
-                }
-                i += 1;
-            }
+        add
+    }
+
+    fn calc_back(&self) -> usize {
+        if self.scan >= self.new.len() {
+            return 0;
         }
-        if scanner.last_scan + add > scanner.scan - lenb {
-            let overlap = scanner.last_scan + add - (scanner.scan - lenb);
+        let mut back = 0;
+        let mut score = 0;
+        let mut best = 0;
+        let mut i = 1;
+        while self.scan >= self.last_scan + i && self.pos >= i {
+            if self.old[self.pos - i] == self.new[self.scan - i] {
+                score += 1;
+            }
+            if score * 2 - i as isize > best * 2 - back as isize {
+                best = score;
+                back = i;
+            }
+            i += 1;
+        }
+        back
+    }
+
+    fn optimize_overlap(&self, mut add: usize, mut back: usize) -> (usize, usize) {
+        if self.last_scan + add > self.scan - back {
+            let overlap = self.last_scan + add - (self.scan - back);
             let mut score = 0;
             let mut best = 0;
-            let mut lens = 0;
+            let mut forward = 0;
             for i in 0..overlap {
-                if scanner.new[scanner.last_scan + add - overlap + i]
-                    == scanner.old[scanner.last_pos + add - overlap + i]
+                if self.new[self.last_scan + add - overlap + i]
+                    == self.old[self.last_pos + add - overlap + i]
                 {
                     score += 1;
                 }
-                if scanner.new[scanner.scan - lenb + i] == scanner.old[scanner.pos - lenb + i] {
+                if self.new[self.scan - back + i] == self.old[self.pos - back + i] {
                     score -= 1;
                 }
                 if score > best {
                     best = score;
-                    lens = i + 1;
+                    forward = i + 1;
                 }
             }
-            add = add + lens - overlap;
-            lenb -= lens;
+            add = add + forward - overlap;
+            back -= forward;
         }
-        let copy = scanner.scan - lenb - (scanner.last_scan + add);
-        let seek = (scanner.pos - scanner.last_pos) as isize - (lenb + add) as isize;
-        encoder.control(Aehobak {
-            add: add as u32,
-            copy: copy as u32,
-            seek: seek as i32,
-        });
-
-        encoder.add(
-            &scanner.old[scanner.last_pos..][..add],
-            &scanner.new[scanner.last_scan..][..add],
-        );
-
-        let copy_from = scanner.last_scan + add;
-        encoder.copy(&scanner.new[copy_from..][..copy]);
-
-        scanner.last_scan = scanner.scan - lenb;
-        scanner.last_pos = scanner.pos - lenb;
-        scanner.last_offset = scanner.pos as i32 - scanner.scan as i32;
+        (add, back)
     }
 
-    encoder.finalize(writer)
+    fn calc_copy_seek(&self, add: usize, back: usize) -> (usize, isize) {
+        let copy = self.scan - back - (self.last_scan + add);
+        let seek = (self.pos - self.last_pos) as isize - (back + add) as isize;
+        (copy, seek)
+    }
+
+    fn commit(&mut self, back: usize) {
+        self.last_scan = self.scan - back;
+        self.last_pos = self.pos - back;
+        self.last_offset = self.pos as isize - self.scan as isize;
+    }
 }
