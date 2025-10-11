@@ -237,7 +237,7 @@ impl<'a> ScanState<'a> {
 
     fn calc_copy_seek(&self, add: usize, back: usize) -> (usize, isize) {
         let copy = self.scan - back - (self.last_scan + add);
-        let seek = (self.pos - self.last_pos) as isize - (back + add) as isize;
+        let seek = self.pos as isize - self.last_pos as isize - (back + add) as isize;
         (copy, seek)
     }
 
