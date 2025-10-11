@@ -35,7 +35,7 @@ pub fn encode<T: Write>(patch: &[u8], writer: &mut T) -> io::Result<()> {
 }
 
 fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
-    let mut encoder = EncoderState::new();
+    let mut encoder = EncoderState::new(patch.len());
 
     while 24 <= patch.len() {
         let control: AehobakControl = BsdiffControl::try_from(&patch[..24])
@@ -65,14 +65,15 @@ pub struct EncoderState {
 }
 
 impl EncoderState {
-    pub fn new() -> Self {
+    pub fn new(len: usize) -> Self {
+        let ops = len / 16; // An initial approximation
         Self {
-            literals: Vec::new(),
-            seeks: Vec::new(),
-            adds: Vec::new(),
-            copies: Vec::new(),
-            delta_skips: Vec::new(),
-            delta_diffs: Vec::new(),
+            literals: Vec::with_capacity(ops),
+            seeks: Vec::with_capacity(ops),
+            adds: Vec::with_capacity(ops),
+            copies: Vec::with_capacity(ops),
+            delta_skips: Vec::with_capacity(ops),
+            delta_diffs: Vec::with_capacity(ops),
             add_cursor: 0,
             delta_cursor: 0,
         }

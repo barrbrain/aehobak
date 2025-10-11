@@ -45,7 +45,7 @@ where
 fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> io::Result<()> {
     let sa = sais(old)?;
     let mut scanner = ScanState::new(old, new, &sa);
-    let mut encoder = EncoderState::new();
+    let mut encoder = EncoderState::new(new.len());
 
     while !scanner.done() {
         if !scanner.advance()? {
@@ -55,10 +55,15 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> io::Result<(
         let mut back = scanner.calc_back()?;
         (add, back) = scanner.optimize_overlap(add, back)?;
         let (copy, seek) = scanner.calc_copy_seek(add, back)?;
+
+        let add_u32: u32 = add.try_into().map_err(invalid_data)?;
+        let copy_u32: u32 = copy.try_into().map_err(invalid_data)?;
+        let seek_i32: i32 = seek.try_into().map_err(invalid_data)?;
+
         encoder.control(Aehobak {
-            add: add.try_into().map_err(invalid_data)?,
-            copy: copy.try_into().map_err(invalid_data)?,
-            seek: seek.try_into().map_err(invalid_data)?,
+            add: add_u32,
+            copy: copy_u32,
+            seek: seek_i32,
         });
         encoder.add(scanner.old_add_slice(add)?, scanner.new_add_slice(add)?);
         encoder.copy(scanner.new_copy_slice(add, copy)?);
@@ -87,6 +92,7 @@ fn sais(old: &[u8]) -> io::Result<Box<[i32]>> {
     }
 }
 
+#[inline(always)]
 fn mismatch(old: &[u8], new: &[u8]) -> usize {
     old.iter().zip(new).take_while(|(a, b)| a == b).count()
 }
@@ -104,6 +110,7 @@ struct ScanState<'a> {
 }
 
 impl<'a> ScanState<'a> {
+    #[inline(always)]
     fn new(old: &'a [u8], new: &'a [u8], sa: &'a [i32]) -> Self {
         Self {
             sa,
@@ -118,6 +125,7 @@ impl<'a> ScanState<'a> {
         }
     }
 
+    #[inline(always)]
     fn done(&self) -> bool {
         self.scan >= self.new.len()
     }
@@ -160,11 +168,7 @@ impl<'a> ScanState<'a> {
         let a = mismatch(old.get(a_start..).ok_or_else(|| invalid_data(""))?, new);
         let b = mismatch(old.get(b_start..).ok_or_else(|| invalid_data(""))?, new);
 
-        if a > b {
-            Ok((a_start, a))
-        } else {
-            Ok((b_start, b))
-        }
+        Ok(if a > b { (a_start, a) } else { (b_start, b) })
     }
 
     fn advance(&mut self) -> io::Result<bool> {
@@ -325,6 +329,7 @@ impl<'a> ScanState<'a> {
         Ok((copy, seek))
     }
 
+    #[inline(always)]
     fn old_add_slice(&self, add: usize) -> Result<&[u8], io::Error> {
         self.old
             .get(self.last_pos..)
@@ -332,6 +337,7 @@ impl<'a> ScanState<'a> {
             .ok_or_else(|| invalid_data(""))
     }
 
+    #[inline(always)]
     fn new_add_slice(&self, add: usize) -> Result<&[u8], io::Error> {
         self.new
             .get(self.last_scan..)
@@ -339,6 +345,7 @@ impl<'a> ScanState<'a> {
             .ok_or_else(|| invalid_data(""))
     }
 
+    #[inline(always)]
     fn new_copy_slice(&self, add: usize, copy: usize) -> Result<&[u8], io::Error> {
         self.new
             .get(self.last_scan..)
