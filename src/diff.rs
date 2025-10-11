@@ -48,24 +48,21 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> io::Result<(
     let mut encoder = EncoderState::new();
 
     while !scanner.done() {
-        if !scanner.advance() {
+        if !scanner.advance()? {
             continue;
         }
-        let mut add = scanner.calc_add();
-        let mut back = scanner.calc_back();
-        (add, back) = scanner.optimize_overlap(add, back);
-        let (copy, seek) = scanner.calc_copy_seek(add, back);
+        let mut add = scanner.calc_add()?;
+        let mut back = scanner.calc_back()?;
+        (add, back) = scanner.optimize_overlap(add, back)?;
+        let (copy, seek) = scanner.calc_copy_seek(add, back)?;
         encoder.control(Aehobak {
-            add: add as u32,
-            copy: copy as u32,
-            seek: seek as i32,
+            add: add.try_into().map_err(invalid_data)?,
+            copy: copy.try_into().map_err(invalid_data)?,
+            seek: seek.try_into().map_err(invalid_data)?,
         });
-        encoder.add(
-            &scanner.old[scanner.last_pos..][..add],
-            &scanner.new[scanner.last_scan..][..add],
-        );
-        encoder.copy(&scanner.new[scanner.last_scan + add..][..copy]);
-        scanner.commit(back);
+        encoder.add(scanner.old_add_slice(add)?, scanner.new_add_slice(add)?);
+        encoder.copy(scanner.new_copy_slice(add, copy)?);
+        scanner.commit(back)?;
     }
     encoder.finalize(writer)
 }
@@ -125,133 +122,240 @@ impl<'a> ScanState<'a> {
         self.scan >= self.new.len()
     }
 
-    fn find_best_match(&self) -> (usize, usize) {
+    fn find_best_match(&self) -> io::Result<(usize, usize)> {
         let mut sa = self.sa;
         let old = self.old;
-        let new = &self.new[self.scan..];
+        let new = self.new.get(self.scan..).ok_or_else(|| invalid_data(""))?;
+
         while sa.len() > 2 {
             let pos = (sa.len() - 1) / 2;
-            let old = &self.old[sa[pos] as usize..];
-            let len = old.len().min(new.len());
-            sa = if old[..len] < new[..len] {
+
+            let old_start = sa
+                .get(pos)
+                .and_then(|&p| usize::try_from(p).ok())
+                .ok_or_else(|| invalid_data(""))?;
+            let old_slice = old.get(old_start..).ok_or_else(|| invalid_data(""))?;
+
+            let len = old_slice.len().min(new.len());
+
+            sa = if old_slice.get(..len) < new.get(..len) {
                 &sa[pos..]
             } else {
                 &sa[..=pos]
             };
         }
-        assert!(!sa.is_empty());
-        let a = mismatch(&old[sa[0] as usize..], new);
-        let b = mismatch(&old[sa[sa.len() - 1] as usize..], new);
+
+        if sa.is_empty() {
+            return Err(invalid_data(""));
+        }
+
+        let a_start = sa
+            .first()
+            .and_then(|&p| usize::try_from(p).ok())
+            .ok_or_else(|| invalid_data(""))?;
+        let b_start = sa
+            .last()
+            .and_then(|&p| usize::try_from(p).ok())
+            .ok_or_else(|| invalid_data(""))?;
+        let a = mismatch(old.get(a_start..).ok_or_else(|| invalid_data(""))?, new);
+        let b = mismatch(old.get(b_start..).ok_or_else(|| invalid_data(""))?, new);
+
         if a > b {
-            (sa[0] as usize, a)
+            Ok((a_start, a))
         } else {
-            (sa[sa.len() - 1] as usize, b)
+            Ok((b_start, b))
         }
     }
 
-    fn advance(&mut self) -> bool {
+    fn advance(&mut self) -> io::Result<bool> {
         let mut score = 0;
-        self.scan += self.len;
+        self.scan = self
+            .scan
+            .checked_add(self.len)
+            .ok_or_else(|| invalid_data(""))?;
         let mut subscan = self.scan;
+
         while self.scan < self.new.len() {
-            (self.pos, self.len) = self.find_best_match();
-            while subscan < self.scan + self.len {
-                if subscan as isize + self.last_offset < self.old.len() as isize
-                    && (self.old[(subscan as isize + self.last_offset) as usize]
-                        == self.new[subscan])
-                {
-                    score += 1;
+            (self.pos, self.len) = self.find_best_match()?;
+            let scan_limit = self
+                .scan
+                .checked_add(self.len)
+                .ok_or_else(|| invalid_data(""))?;
+
+            while subscan < scan_limit {
+                let idx = subscan
+                    .checked_add_signed(self.last_offset)
+                    .ok_or_else(|| invalid_data(""))?;
+                if let Some(old_byte) = self.old.get(idx) {
+                    if old_byte == &self.new[subscan] {
+                        score += 1;
+                    }
                 }
-                subscan += 1;
+                subscan = subscan.checked_add(1).ok_or_else(|| invalid_data(""))?;
             }
+
             if (self.len == score && self.len != 0) || self.len > score + 8 {
                 break;
             }
-            if self.scan as isize + self.last_offset < self.old.len() as isize
-                && (self.old[(self.scan as isize + self.last_offset) as usize]
-                    == self.new[self.scan])
-            {
+
+            let idx = self
+                .scan
+                .checked_add_signed(self.last_offset)
+                .ok_or_else(|| invalid_data(""))?;
+            if idx < self.old.len() && self.old[idx] == self.new[self.scan] {
                 score -= 1;
             }
-            self.scan += 1;
+            self.scan = self.scan.checked_add(1).ok_or_else(|| invalid_data(""))?;
         }
-        self.len != score || self.scan == self.new.len()
+
+        Ok(self.len != score || self.scan == self.new.len())
     }
 
-    fn calc_add(&self) -> usize {
+    fn calc_add(&self) -> io::Result<usize> {
         let mut add = 0;
         let mut score = 0;
         let mut best = 0;
         let mut i = 0;
+
         while self.last_scan + i < self.scan && self.last_pos + i < self.old.len() {
-            if self.old[self.last_pos + i] == self.new[self.last_scan + i] {
+            if self
+                .old
+                .get(self.last_pos + i)
+                .zip(self.new.get(self.last_scan + i))
+                .is_some_and(|(o, n)| o == n)
+            {
                 score += 1;
             }
-            i += 1;
+            i = i.checked_add(1).ok_or_else(|| invalid_data(""))?;
             if score * 2 - i as i32 > best * 2 - add as i32 {
                 best = score;
                 add = i;
             }
         }
-        add
+
+        Ok(add)
     }
 
-    fn calc_back(&self) -> usize {
+    fn calc_back(&self) -> io::Result<usize> {
         if self.scan >= self.new.len() {
-            return 0;
+            return Ok(0);
         }
+
         let mut back = 0;
         let mut score = 0;
         let mut best = 0;
         let mut i = 1;
+
         while self.scan >= self.last_scan + i && self.pos >= i {
-            if self.old[self.pos - i] == self.new[self.scan - i] {
+            if self
+                .old
+                .get(self.pos.checked_sub(i).ok_or_else(|| invalid_data(""))?)
+                .zip(
+                    self.new
+                        .get(self.scan.checked_sub(i).ok_or_else(|| invalid_data(""))?),
+                )
+                .is_some_and(|(o, n)| o == n)
+            {
                 score += 1;
             }
+
             if score * 2 - i as isize > best * 2 - back as isize {
                 best = score;
                 back = i;
             }
-            i += 1;
+
+            i = i.checked_add(1).ok_or_else(|| invalid_data(""))?;
         }
-        back
+
+        Ok(back)
     }
 
-    fn optimize_overlap(&self, mut add: usize, mut back: usize) -> (usize, usize) {
-        if self.last_scan + add > self.scan - back {
+    fn optimize_overlap(&self, mut add: usize, mut back: usize) -> io::Result<(usize, usize)> {
+        if self
+            .last_scan
+            .checked_add(add)
+            .ok_or_else(|| invalid_data(""))?
+            > self
+                .scan
+                .checked_sub(back)
+                .ok_or_else(|| invalid_data(""))?
+        {
             let overlap = self.last_scan + add - (self.scan - back);
+
             let mut score = 0;
             let mut best = 0;
             let mut forward = 0;
+
             for i in 0..overlap {
-                if self.new[self.last_scan + add - overlap + i]
-                    == self.old[self.last_pos + add - overlap + i]
+                // Safely compare indices within bounds
+                if self.new.get(self.last_scan + add - overlap + i)
+                    == self.old.get(self.last_pos + add - overlap + i)
                 {
                     score += 1;
                 }
-                if self.new[self.scan - back + i] == self.old[self.pos - back + i] {
+
+                if self.new.get(self.scan - back + i) == self.old.get(self.pos - back + i) {
                     score -= 1;
                 }
+
                 if score > best {
                     best = score;
                     forward = i + 1;
                 }
             }
+
             add = add + forward - overlap;
             back -= forward;
         }
-        (add, back)
+
+        Ok((add, back))
     }
 
-    fn calc_copy_seek(&self, add: usize, back: usize) -> (usize, isize) {
-        let copy = self.scan - back - (self.last_scan + add);
-        let seek = self.pos as isize - self.last_pos as isize - (back + add) as isize;
-        (copy, seek)
+    fn calc_copy_seek(&self, add: usize, back: usize) -> io::Result<(usize, isize)> {
+        let copy = self
+            .scan
+            .checked_sub(back)
+            .and_then(|v| v.checked_sub(self.last_scan + add))
+            .ok_or_else(|| invalid_data(""))?;
+        let seek = (self.pos as isize)
+            .checked_sub(self.last_pos as isize)
+            .and_then(|v| v.checked_sub((back + add) as isize))
+            .ok_or_else(|| invalid_data(""))?;
+
+        Ok((copy, seek))
     }
 
-    fn commit(&mut self, back: usize) {
-        self.last_scan = self.scan - back;
-        self.last_pos = self.pos - back;
-        self.last_offset = self.pos as isize - self.scan as isize;
+    fn old_add_slice(&self, add: usize) -> Result<&[u8], io::Error> {
+        self.old
+            .get(self.last_pos..)
+            .and_then(|s| s.get(..add))
+            .ok_or_else(|| invalid_data(""))
+    }
+
+    fn new_add_slice(&self, add: usize) -> Result<&[u8], io::Error> {
+        self.new
+            .get(self.last_scan..)
+            .and_then(|s| s.get(..add))
+            .ok_or_else(|| invalid_data(""))
+    }
+
+    fn new_copy_slice(&self, add: usize, copy: usize) -> Result<&[u8], io::Error> {
+        self.new
+            .get(self.last_scan..)
+            .and_then(|s| s.get(add..))
+            .and_then(|s| s.get(..copy))
+            .ok_or_else(|| invalid_data(""))
+    }
+
+    fn commit(&mut self, back: usize) -> io::Result<()> {
+        self.last_scan = self
+            .scan
+            .checked_sub(back)
+            .ok_or_else(|| invalid_data(""))?;
+        self.last_pos = self.pos.checked_sub(back).ok_or_else(|| invalid_data(""))?;
+        self.last_offset = (self.pos as isize)
+            .checked_sub(self.scan as isize)
+            .ok_or_else(|| invalid_data(""))?;
+        Ok(())
     }
 }
