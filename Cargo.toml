@@ -1,6 +1,6 @@
 [package]
 name = "aehobak"
-version = "0.0.11"
+version = "0.0.12"
 authors = ["David Michael Barr <b@rr-dav.id.au>"]
 description = "Transcoder for bsdiff binary patches."
 readme = "README.md"
