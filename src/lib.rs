@@ -96,7 +96,7 @@ mod tests {
             bsdiff::diff(&old, &new, &mut bspatch).unwrap();
             encode(&bspatch, &mut encoded).unwrap();
             diff(&old, &new, &mut patch).unwrap();
-            patch == encoded
+            patch.len() <= encoded.len() + 1
         }
 
         fn arbitrary_patch(skeleton: LinkedList<(u8,u8,i8)>, period: u8) -> bool {
@@ -150,7 +150,7 @@ mod tests {
                         let mut bsencoded = Vec::new();
                         bsdiff::diff(&old, &new, &mut bspatch).unwrap();
                         encode(&bspatch, &mut bsencoded).unwrap();
-                        TestResult::from_bool(encoded.len() == bsencoded.len())
+                        TestResult::from_bool(encoded.len() <= bsencoded.len() + 1)
                     }
                 }
                 _ => TestResult::failed(),

@@ -35,8 +35,8 @@ pub fn diff<T: Write>(old: &[u8], new: &[u8], writer: &mut T) -> io::Result<()> 
 }
 
 fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn std::io::Write) -> std::io::Result<()> {
-    let mut sa = vec![0; old.len() + 1];
-    sais(&mut sa, &mut vec![0; old.len() + 1], old);
+    let mut sa = vec![0; old.len()];
+    sais(&mut sa, old);
     let mut scanner = ScanState::new(old, new, &sa);
     let mut encoder = EncoderState::new();
 
@@ -63,22 +63,13 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn std::io::Write) -> std
     encoder.finalize(writer)
 }
 
-fn sais(sa: &mut [i32], tmp: &mut [u16], old: &[u8]) {
+fn sais(sa: &mut [i32], old: &[u8]) {
     use core::ptr::null_mut;
-    use libsais_sys::libsais16::libsais16;
+    use libsais_sys::libsais::libsais;
 
-    assert_eq!(tmp.len(), old.len() + 1);
-    assert_eq!(sa.len(), old.len() + 1);
-    assert!(tmp.len() <= i32::MAX as usize);
+    let len = old.len() as i32;
 
-    // Use tmp for appending the sentinel symbol
-    for (&o, t) in old.iter().zip(tmp.iter_mut()) {
-        *t = o as u16 + 1;
-    }
-    tmp[old.len()] = 0;
-    let len = tmp.len() as i32;
-
-    let ret = unsafe { libsais16(tmp.as_ptr(), sa.as_mut_ptr(), len, 0, null_mut()) };
+    let ret = unsafe { libsais(old.as_ptr(), sa.as_mut_ptr(), len, 0, null_mut()) };
     assert_eq!(ret, 0);
 }
 
