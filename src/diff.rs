@@ -25,8 +25,8 @@
 
 use crate::control::Aehobak;
 use crate::encode::EncoderState;
-use std::io;
 use std::io::Write;
+use std::{error, io};
 
 /// Directly generate a compact representation of bsdiff output.
 /// Experimental: may assert if preconditions unmet.
@@ -34,9 +34,16 @@ pub fn diff<T: Write>(old: &[u8], new: &[u8], writer: &mut T) -> io::Result<()> 
     diff_internal(old, new, writer)
 }
 
-fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn std::io::Write) -> std::io::Result<()> {
-    let mut sa = vec![0; old.len()];
-    sais(&mut sa, old);
+#[inline]
+fn invalid_data<E>(e: E) -> io::Error
+where
+    E: Into<Box<dyn error::Error + Send + Sync>>,
+{
+    io::Error::new(io::ErrorKind::InvalidData, e)
+}
+
+fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> io::Result<()> {
+    let sa = sais(old)?;
     let mut scanner = ScanState::new(old, new, &sa);
     let mut encoder = EncoderState::new();
 
@@ -63,14 +70,24 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn std::io::Write) -> std
     encoder.finalize(writer)
 }
 
-fn sais(sa: &mut [i32], old: &[u8]) {
-    use core::ptr::null_mut;
+fn sais(old: &[u8]) -> io::Result<Box<[i32]>> {
     use libsais_sys::libsais::libsais;
-
+    if old.len() > i32::MAX as usize {
+        return Err(invalid_data("libsais input too large"));
+    }
+    let mut sa = Vec::with_capacity(old.len());
     let len = old.len() as i32;
-
-    let ret = unsafe { libsais(old.as_ptr(), sa.as_mut_ptr(), len, 0, null_mut()) };
-    assert_eq!(ret, 0);
+    let mut freq = Vec::with_capacity(256);
+    let ret = unsafe { libsais(old.as_ptr(), sa.as_mut_ptr(), len, 0, freq.as_mut_ptr()) };
+    if ret == 0 {
+        unsafe {
+            sa.set_len(old.len());
+            freq.set_len(256);
+        }
+        Ok(sa.into_boxed_slice())
+    } else {
+        Err(io::Error::other("libsais failed"))
+    }
 }
 
 fn mismatch(old: &[u8], new: &[u8]) -> usize {
