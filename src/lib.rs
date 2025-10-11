@@ -40,7 +40,7 @@ pub use patch::patch;
 mod tests {
     use super::*;
     use bsdiff;
-    use quickcheck::quickcheck;
+    use quickcheck::{quickcheck, TestResult};
     use std::collections::LinkedList;
 
     quickcheck! {
@@ -115,6 +115,45 @@ mod tests {
                     reference == result
                 }
                 _ => false,
+            }
+        }
+
+        fn arbitrary_diff(skeleton: LinkedList<(u8,u8,i8)>, period: u8) -> TestResult {
+            use rand_xoshiro::rand_core::{RngCore, SeedableRng};
+            use rand_xoshiro::Xoshiro256Plus;
+            use std::io::ErrorKind::{InvalidData, UnexpectedEof};
+            let (old, new) = {
+                let (bspatch, old_len, new_len) = gen_bspatch(skeleton, period);
+                if old_len == 0 {
+                    return TestResult::discard();
+                }
+                let mut new = Vec::with_capacity(new_len);
+                let mut old = vec![0; old_len];
+                let mut rng = Xoshiro256Plus::seed_from_u64(0xeba2fa67e5a81121);
+                rng.fill_bytes(&mut old);
+                if bsdiff::patch(&old, &mut bspatch.as_slice(), &mut new).is_err() {
+                    return TestResult::discard();
+                }
+                (old, new)
+            };
+            let mut result = Vec::with_capacity(new.len());
+            let mut encoded = Vec::with_capacity(new.len());
+            diff(&old, &new, &mut encoded).unwrap();
+            match patch(&old, &encoded, &mut result) {
+                Err(e) if e.kind() == InvalidData => TestResult::error(e.to_string()),
+                Err(e) if e.kind() == UnexpectedEof => TestResult::error(e.to_string()),
+                Ok(_) => {
+                    if new != result {
+                        TestResult::failed()
+                    } else {
+                        let mut bspatch = Vec::new();
+                        let mut bsencoded = Vec::new();
+                        bsdiff::diff(&old, &new, &mut bspatch).unwrap();
+                        encode(&bspatch, &mut bsencoded).unwrap();
+                        TestResult::from_bool(encoded.len() == bsencoded.len())
+                    }
+                }
+                _ => TestResult::failed(),
             }
         }
     }

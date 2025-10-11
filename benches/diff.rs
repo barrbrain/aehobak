@@ -27,8 +27,8 @@
 mod data;
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
-use rand_chacha::rand_core::{RngCore, SeedableRng};
-use rand_chacha::ChaCha8Rng;
+use rand_xoshiro::rand_core::{RngCore, SeedableRng};
+use rand_xoshiro::Xoshiro256Plus;
 use std::hint::black_box;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -36,7 +36,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     let mut bspatch = Vec::with_capacity(524288);
     let mut new = Vec::with_capacity(524288);
     let mut encoded = Vec::with_capacity(524288);
-    let mut rng = ChaCha8Rng::seed_from_u64(0xeba2fa67e5a81121);
+    let mut rng = Xoshiro256Plus::seed_from_u64(0xeba2fa67e5a81121);
     let mut old = vec![0u8; 524288];
     rng.fill_bytes(&mut old);
     aehobak::patch(
