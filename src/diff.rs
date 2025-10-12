@@ -30,7 +30,6 @@ use std::{error, io};
 
 /// Directly generate a compact representation of bsdiff output.
 /// If numeric limits are reached, the error will be wrapped with `io::Error`.
-/// The exact control sequence may not match the bsdiff crate.
 pub fn diff<T: Write>(old: &[u8], new: &[u8], writer: &mut T) -> io::Result<()> {
     diff_internal(old, new, writer)
 }
