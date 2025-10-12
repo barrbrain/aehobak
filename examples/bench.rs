@@ -13,9 +13,9 @@ fn bench(orig_file: &str, file: &str) -> std::io::Result<()> {
     let mut patch = Vec::new();
     let mut encoded = Vec::new();
 
-    bsdiff::diff(&old, &new, &mut patch)?;
+    aehobak::diff(&old, &new, &mut encoded)?;
+    aehobak::decode(&mut encoded.as_slice(), &mut patch)?;
     println!("bsdiff:      {} bytes", patch.len());
-    aehobak::encode(&patch, &mut encoded)?;
     println!("aehobak:     {} bytes", encoded.len());
     let bsdiff_lz4 = lz4_flex::block::compress(&patch).len();
     println!("bsdiff+lz4:  {} bytes", bsdiff_lz4);
