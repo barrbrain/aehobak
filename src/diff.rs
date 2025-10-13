@@ -73,6 +73,7 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> io::Result<(
 }
 
 fn sais(old: &[u8]) -> io::Result<Box<[i32]>> {
+    use core::ptr::null_mut;
     use libsais_sys::libsais::libsais;
     if old.len() > i32::MAX as usize - 1 {
         return Err(invalid_data("libsais input too large"));
@@ -81,13 +82,9 @@ fn sais(old: &[u8]) -> io::Result<Box<[i32]>> {
     let len = old.len() as i32;
     sa.push(len);
     let sa_1 = &mut sa[1..];
-    let mut freq = Vec::with_capacity(256);
-    let ret = unsafe { libsais(old.as_ptr(), sa_1.as_mut_ptr(), len, 0, freq.as_mut_ptr()) };
+    let ret = unsafe { libsais(old.as_ptr(), sa_1.as_mut_ptr(), len, 0, null_mut()) };
     if ret == 0 {
-        unsafe {
-            sa.set_len(old.len() + 1);
-            freq.set_len(256);
-        }
+        unsafe { sa.set_len(old.len() + 1) };
         Ok(sa.into_boxed_slice())
     } else {
         Err(io::Error::other("libsais failed"))
