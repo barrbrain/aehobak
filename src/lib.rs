@@ -96,7 +96,7 @@ mod tests {
             bsdiff::diff(&old, &new, &mut bspatch).unwrap();
             encode(&bspatch, &mut encoded).unwrap();
             diff(&old, &new, &mut patch).unwrap();
-            patch == encoded
+            patch.len() <= encoded.len() + 1
         }
 
         fn arbitrary_patch(skeleton: LinkedList<(u8,u8,i8)>, period: u8) -> bool {
@@ -121,6 +121,7 @@ mod tests {
         fn arbitrary_diff(skeleton: LinkedList<(u8,u8,i8)>, period: u8) -> TestResult {
             use rand_xoshiro::rand_core::{RngCore, SeedableRng};
             use rand_xoshiro::Xoshiro256Plus;
+            use std::io::ErrorKind::{InvalidData, UnexpectedEof};
             let (old, new) = {
                 let (bspatch, old_len, new_len) = gen_bspatch(skeleton, period);
                 let mut new = Vec::with_capacity(new_len);
@@ -132,13 +133,25 @@ mod tests {
                 }
                 (old, new)
             };
+            let mut result = Vec::with_capacity(new.len());
             let mut encoded = Vec::with_capacity(new.len());
             diff(&old, &new, &mut encoded).unwrap();
-            let mut bspatch = Vec::new();
-            let mut bsencoded = Vec::new();
-            bsdiff::diff(&old, &new, &mut bspatch).unwrap();
-            encode(&bspatch, &mut bsencoded).unwrap();
-            TestResult::from_bool(encoded == bsencoded)
+            match patch(&old, &encoded, &mut result) {
+                Err(e) if e.kind() == InvalidData => TestResult::error(e.to_string()),
+                Err(e) if e.kind() == UnexpectedEof => TestResult::error(e.to_string()),
+                Ok(_) => {
+                    if new != result {
+                        TestResult::failed()
+                    } else {
+                        let mut bspatch = Vec::new();
+                        let mut bsencoded = Vec::new();
+                        bsdiff::diff(&old, &new, &mut bspatch).unwrap();
+                        encode(&bspatch, &mut bsencoded).unwrap();
+                        TestResult::from_bool(encoded.len() <= bsencoded.len() + 1)
+                    }
+                }
+                _ => TestResult::failed(),
+            }
         }
     }
 

@@ -43,8 +43,8 @@ where
 }
 
 fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> io::Result<()> {
-    let sa = sais(old)?;
-    let mut scanner = ScanState::new(old, new, &sa);
+    let (sa, cf) = sais(old)?;
+    let mut scanner = ScanState::new(old, new, &sa, &cf);
     let mut encoder = EncoderState::new(new.len());
 
     while !scanner.done() {
@@ -72,7 +72,8 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> io::Result<(
     encoder.finalize(writer)
 }
 
-fn sais(old: &[u8]) -> io::Result<Box<[i32]>> {
+#[allow(clippy::type_complexity)]
+fn sais(old: &[u8]) -> io::Result<(Box<[i32]>, Box<[i32]>)> {
     use libsais_sys::libsais::libsais;
     if old.len() > i32::MAX as usize - 1 {
         return Err(invalid_data("libsais input too large"));
@@ -88,7 +89,12 @@ fn sais(old: &[u8]) -> io::Result<Box<[i32]>> {
             sa.set_len(old.len() + 1);
             freq.set_len(256);
         }
-        Ok(sa.into_boxed_slice())
+        // Compute cumulative frequency in-place
+        freq[0] += 1; // There is one sentinel, "-1"
+        for i in 1..256 {
+            freq[i] += freq[i - 1];
+        }
+        Ok((sa.into_boxed_slice(), freq.into_boxed_slice()))
     } else {
         Err(io::Error::other("libsais failed"))
     }
@@ -101,6 +107,7 @@ fn mismatch(old: &[u8], new: &[u8]) -> usize {
 
 struct ScanState<'a> {
     sa: &'a [i32],
+    cf: &'a [i32; 256],
     old: &'a [u8],
     new: &'a [u8],
     scan: usize,
@@ -113,9 +120,10 @@ struct ScanState<'a> {
 
 impl<'a> ScanState<'a> {
     #[inline(always)]
-    fn new(old: &'a [u8], new: &'a [u8], sa: &'a [i32]) -> Self {
+    fn new(old: &'a [u8], new: &'a [u8], sa: &'a [i32], cf: &'a [i32]) -> Self {
         Self {
             sa,
+            cf: cf.try_into().unwrap(),
             old,
             new,
             scan: 0,
@@ -133,9 +141,17 @@ impl<'a> ScanState<'a> {
     }
 
     fn find_best_match(&self) -> io::Result<(usize, usize)> {
-        let mut sa = self.sa;
         let old = self.old;
         let new = self.new.get(self.scan..).ok_or_else(|| invalid_data(""))?;
+        if new.is_empty() {
+            return Ok((old.len(), 0));
+        }
+        let mut sa: &[i32] = unsafe {
+            let first = *new.get_unchecked(0) as usize;
+            self.sa.get_unchecked(
+                if first == 0 { 1 } else { self.cf[first - 1] } as usize..self.cf[first] as usize,
+            )
+        };
 
         while sa.len() > 2 {
             let pos = (sa.len() - 1) / 2;
@@ -156,7 +172,7 @@ impl<'a> ScanState<'a> {
         }
 
         if sa.is_empty() {
-            return Err(invalid_data(""));
+            return Ok((old.len(), 0));
         }
 
         let a_start = sa
