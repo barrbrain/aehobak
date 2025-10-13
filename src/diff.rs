@@ -163,8 +163,21 @@ impl<'a> ScanState<'a> {
             let old_slice = old.get(old_start..).ok_or_else(|| invalid_data(""))?;
 
             let len = old_slice.len().min(new.len());
-
-            sa = if old_slice.get(..len) < new.get(..len) {
+            const N: usize = 8;
+            sa = if len >= N {
+                use std::cmp::Ordering::*;
+                match old_slice[..N].cmp(&new[..N]) {
+                    Less => &sa[pos..],
+                    Greater => &sa[..=pos],
+                    Equal => {
+                        if old_slice.get(N..len) < new.get(N..len) {
+                            &sa[pos..]
+                        } else {
+                            &sa[..=pos]
+                        }
+                    }
+                }
+            } else if old_slice.get(..len) < new.get(..len) {
                 &sa[pos..]
             } else {
                 &sa[..=pos]
