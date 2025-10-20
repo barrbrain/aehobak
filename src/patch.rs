@@ -62,6 +62,7 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
         .checked_mul(4)
         .ok_or(io::Error::from(InvalidData))?;
     // SAFETY: This follows from the checked arithmetic above
+    debug_assert!(u32_seq_len >= controls.div_ceil(4) * 12);
     unsafe { assert_unchecked(u32_seq_len >= controls.div_ceil(4) * 12) }
 
     let mut tags = patch
@@ -126,6 +127,7 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
         };
         read = coder.decode(tags, add_data, &mut adds);
         // SAFETY: This follows from the checked arithmetic above
+        debug_assert!(read <= add_data.len());
         unsafe { assert_unchecked(read <= add_data.len()) }
         add_data = &add_data[read..];
         tags = if copy_tags.len() >= 8 {
@@ -137,6 +139,7 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
         };
         read = coder.decode(tags, copy_data, &mut copies);
         // SAFETY: This follows from the checked arithmetic above
+        debug_assert!(read <= copy_data.len());
         unsafe { assert_unchecked(read <= copy_data.len()) }
         copy_data = &copy_data[read..];
         tags = if seek_tags.len() >= 8 {
@@ -148,6 +151,7 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
         };
         read = coder.decode(tags, seek_data, &mut seeks);
         // SAFETY: This follows from the checked arithmetic above
+        debug_assert!(read <= seek_data.len());
         unsafe { assert_unchecked(read <= seek_data.len()) }
         seek_data = &seek_data[read..];
         for seek in &mut seeks {
@@ -179,6 +183,7 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
                     };
                     read = coder.decode_deltas(delta_base, tags, delta_data, &mut delta_pos_buf);
                     // SAFETY: This follows from the checked arithmetic above
+                    debug_assert!(read <= delta_data.len());
                     unsafe { assert_unchecked(read <= delta_data.len()) }
                     delta_pos = &mut delta_pos_buf[..];
                     for (idx, pos) in delta_pos.iter_mut().enumerate() {
