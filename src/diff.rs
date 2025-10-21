@@ -25,24 +25,23 @@
 
 use crate::control::Aehobak;
 use crate::encode::EncoderState;
+use anyhow::{ensure, Context, Error, Result};
+use std::io;
 use std::io::Write;
-use std::{error, io};
 
 /// Directly generate a compact representation of bsdiff output.
 /// If numeric limits are reached, the error will be wrapped with `io::Error`.
 pub fn diff<T: Write>(old: &[u8], new: &[u8], writer: &mut T) -> io::Result<()> {
-    diff_internal(old, new, writer)
+    match diff_internal(old, new, writer) {
+        Ok(_) => Ok(()),
+        Err(e) => match e.downcast::<io::Error>() {
+            Ok(e) => Err(e),
+            Err(e) => Err(io::Error::other(e)),
+        },
+    }
 }
 
-#[inline]
-fn invalid_data<E>(e: E) -> io::Error
-where
-    E: Into<Box<dyn error::Error + Send + Sync>>,
-{
-    io::Error::new(io::ErrorKind::InvalidData, e)
-}
-
-fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> io::Result<()> {
+fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> Result<()> {
     let sa = sais(old)?;
     let mut scanner = ScanState::new(old, new, &sa);
     let mut encoder = EncoderState::new(new.len());
@@ -51,14 +50,12 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> io::Result<(
         if !scanner.advance()? {
             continue;
         }
-        let mut add = scanner.calc_add()?;
-        let mut back = scanner.calc_back()?;
-        (add, back) = scanner.optimize_overlap(add, back)?;
+        let (add, back) = scanner.optimize_overlap(scanner.calc_add()?, scanner.calc_back()?)?;
         let (copy, seek) = scanner.calc_copy_seek(add, back)?;
 
-        let add_u32: u32 = add.try_into().map_err(invalid_data)?;
-        let copy_u32: u32 = copy.try_into().map_err(invalid_data)?;
-        let seek_i32: i32 = seek.try_into().map_err(invalid_data)?;
+        let add_u32: u32 = add.try_into()?;
+        let copy_u32: u32 = copy.try_into()?;
+        let seek_i32: i32 = seek.try_into()?;
 
         encoder.control(Aehobak {
             add: add_u32,
@@ -69,31 +66,27 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> io::Result<(
         encoder.copy(scanner.new_copy_slice(add, copy)?);
         scanner.commit(back)?;
     }
-    encoder.finalize(writer)
+    encoder.finalize(writer)?;
+    Ok(())
 }
 
-fn sais(old: &[u8]) -> io::Result<Box<[i32]>> {
+fn sais(old: &[u8]) -> Result<Box<[i32]>> {
     use core::ptr::null_mut;
     use libsais_sys::libsais::libsais;
-    if old.len() > i32::MAX as usize - 1 {
-        return Err(invalid_data("libsais input too large"));
-    }
+    ensure!(old.len() <= i32::MAX as usize, "input too large");
     let mut sa = Vec::with_capacity(old.len() + 1);
     let len = old.len() as i32;
     sa.push(len);
     let sa_1 = &mut sa[1..];
     let ret = unsafe { libsais(old.as_ptr(), sa_1.as_mut_ptr(), len, 0, null_mut()) };
-    if ret == 0 {
-        unsafe { sa.set_len(old.len() + 1) };
-        Ok(sa.into_boxed_slice())
-    } else {
-        Err(io::Error::other("libsais failed"))
-    }
+    ensure!(ret == 0, "libsais failed");
+    unsafe { sa.set_len(old.len() + 1) };
+    Ok(sa.into_boxed_slice())
 }
 
 #[inline(always)]
 fn mismatch(old: &[u8], new: &[u8]) -> usize {
-    old.iter().zip(new).take_while(|(a, b)| a == b).count()
+    old.iter().zip(new).take_while(|(&a, &b)| a == b).count()
 }
 
 struct ScanState<'a> {
@@ -129,22 +122,19 @@ impl<'a> ScanState<'a> {
         self.scan >= self.new.len()
     }
 
-    fn find_best_match(&self) -> io::Result<(usize, usize)> {
+    fn find_best_match(&self) -> Result<(usize, usize)> {
         let mut sa = self.sa;
-        let old = self.old;
-        let new = self.new.get(self.scan..).ok_or_else(|| invalid_data(""))?;
+        let new = self.new.get(self.scan..).context("")?;
 
         while sa.len() > 2 {
             let pos = (sa.len() - 1) / 2;
-
             let old_start = sa
                 .get(pos)
                 .and_then(|&p| usize::try_from(p).ok())
-                .ok_or_else(|| invalid_data(""))?;
-            let old_slice = old.get(old_start..).ok_or_else(|| invalid_data(""))?;
+                .context("")?;
+            let old_slice = self.old.get(old_start..).context("")?;
 
             let len = old_slice.len().min(new.len());
-
             sa = if old_slice.get(..len) < new.get(..len) {
                 &sa[pos..]
             } else {
@@ -152,69 +142,53 @@ impl<'a> ScanState<'a> {
             };
         }
 
-        if sa.is_empty() {
-            return Err(invalid_data(""));
-        }
-
         let a_start = sa
             .first()
             .and_then(|&p| usize::try_from(p).ok())
-            .ok_or_else(|| invalid_data(""))?;
+            .context("")?;
         let b_start = sa
             .last()
             .and_then(|&p| usize::try_from(p).ok())
-            .ok_or_else(|| invalid_data(""))?;
-        let a = mismatch(old.get(a_start..).ok_or_else(|| invalid_data(""))?, new);
-        let b = mismatch(old.get(b_start..).ok_or_else(|| invalid_data(""))?, new);
+            .context("")?;
+        let a = mismatch(self.old.get(a_start..).context("")?, new);
+        let b = mismatch(self.old.get(b_start..).context("")?, new);
 
         Ok(if a > b { (a_start, a) } else { (b_start, b) })
     }
 
-    fn advance(&mut self) -> io::Result<bool> {
+    fn advance(&mut self) -> Result<bool> {
+        self.scan = self.scan.checked_add(self.len).context("")?;
         let mut score = 0;
-        self.scan = self
-            .scan
-            .checked_add(self.len)
-            .ok_or_else(|| invalid_data(""))?;
         let mut subscan = self.scan;
 
         while self.scan < self.new.len() {
             (self.pos, self.len) = self.find_best_match()?;
-            let scan_limit = self
-                .scan
-                .checked_add(self.len)
-                .ok_or_else(|| invalid_data(""))?;
+            let scan_limit = self.scan.checked_add(self.len).context("")?;
 
             while subscan < scan_limit {
-                let idx = subscan
-                    .checked_add_signed(self.last_offset)
-                    .ok_or_else(|| invalid_data(""))?;
+                let idx = subscan.checked_add_signed(self.last_offset).context("")?;
                 if let Some(old_byte) = self.old.get(idx) {
                     if old_byte == &self.new[subscan] {
                         score += 1;
                     }
                 }
-                subscan = subscan.checked_add(1).ok_or_else(|| invalid_data(""))?;
+                subscan = subscan.checked_add(1).context("")?;
             }
 
             if (self.len == score && self.len != 0) || self.len > score + 8 {
                 break;
             }
 
-            let idx = self
-                .scan
-                .checked_add_signed(self.last_offset)
-                .ok_or_else(|| invalid_data(""))?;
+            let idx = self.scan.checked_add_signed(self.last_offset).context("")?;
             if idx < self.old.len() && self.old[idx] == self.new[self.scan] {
                 score -= 1;
             }
-            self.scan = self.scan.checked_add(1).ok_or_else(|| invalid_data(""))?;
+            self.scan = self.scan.checked_add(1).context("")?;
         }
-
         Ok(self.len != score || self.scan == self.new.len())
     }
 
-    fn calc_add(&self) -> io::Result<usize> {
+    fn calc_add(&self) -> Result<usize> {
         let mut add = 0;
         let mut score = 0;
         let mut best = 0;
@@ -229,17 +203,16 @@ impl<'a> ScanState<'a> {
             {
                 score += 1;
             }
-            i = i.checked_add(1).ok_or_else(|| invalid_data(""))?;
+            i = i.checked_add(1).context("")?;
             if score * 2 - i as i32 > best * 2 - add as i32 {
                 best = score;
                 add = i;
             }
         }
-
         Ok(add)
     }
 
-    fn calc_back(&self) -> io::Result<usize> {
+    fn calc_back(&self) -> Result<usize> {
         if self.scan >= self.new.len() {
             return Ok(0);
         }
@@ -252,11 +225,8 @@ impl<'a> ScanState<'a> {
         while self.scan >= self.last_scan + i && self.pos >= i {
             if self
                 .old
-                .get(self.pos.checked_sub(i).ok_or_else(|| invalid_data(""))?)
-                .zip(
-                    self.new
-                        .get(self.scan.checked_sub(i).ok_or_else(|| invalid_data(""))?),
-                )
+                .get(self.pos.checked_sub(i).context("")?)
+                .zip(self.new.get(self.scan.checked_sub(i).context("")?))
                 .is_some_and(|(o, n)| o == n)
             {
                 score += 1;
@@ -266,23 +236,13 @@ impl<'a> ScanState<'a> {
                 best = score;
                 back = i;
             }
-
-            i = i.checked_add(1).ok_or_else(|| invalid_data(""))?;
+            i = i.checked_add(1).context("")?;
         }
-
         Ok(back)
     }
 
-    fn optimize_overlap(&self, mut add: usize, mut back: usize) -> io::Result<(usize, usize)> {
-        if self
-            .last_scan
-            .checked_add(add)
-            .ok_or_else(|| invalid_data(""))?
-            > self
-                .scan
-                .checked_sub(back)
-                .ok_or_else(|| invalid_data(""))?
-        {
+    fn optimize_overlap(&self, mut add: usize, mut back: usize) -> Result<(usize, usize)> {
+        if self.last_scan.checked_add(add).context("")? > self.scan.checked_sub(back).context("")? {
             let overlap = self.last_scan + add - (self.scan - back);
 
             let mut score = 0;
@@ -314,54 +274,51 @@ impl<'a> ScanState<'a> {
         Ok((add, back))
     }
 
-    fn calc_copy_seek(&self, add: usize, back: usize) -> io::Result<(usize, isize)> {
+    fn calc_copy_seek(&self, add: usize, back: usize) -> Result<(usize, isize)> {
         let copy = self
             .scan
             .checked_sub(back)
             .and_then(|v| v.checked_sub(self.last_scan + add))
-            .ok_or_else(|| invalid_data(""))?;
+            .context("")?;
         let seek = (self.pos as isize)
             .checked_sub(self.last_pos as isize)
             .and_then(|v| v.checked_sub((back + add) as isize))
-            .ok_or_else(|| invalid_data(""))?;
+            .context("")?;
 
         Ok((copy, seek))
     }
 
     #[inline(always)]
-    fn old_add_slice(&self, add: usize) -> Result<&[u8], io::Error> {
+    fn old_add_slice(&self, add: usize) -> Result<&[u8], Error> {
         self.old
             .get(self.last_pos..)
             .and_then(|s| s.get(..add))
-            .ok_or_else(|| invalid_data(""))
+            .context("")
     }
 
     #[inline(always)]
-    fn new_add_slice(&self, add: usize) -> Result<&[u8], io::Error> {
+    fn new_add_slice(&self, add: usize) -> Result<&[u8], Error> {
         self.new
             .get(self.last_scan..)
             .and_then(|s| s.get(..add))
-            .ok_or_else(|| invalid_data(""))
+            .context("")
     }
 
     #[inline(always)]
-    fn new_copy_slice(&self, add: usize, copy: usize) -> Result<&[u8], io::Error> {
+    fn new_copy_slice(&self, add: usize, copy: usize) -> Result<&[u8], Error> {
         self.new
             .get(self.last_scan..)
             .and_then(|s| s.get(add..))
             .and_then(|s| s.get(..copy))
-            .ok_or_else(|| invalid_data(""))
+            .context("")
     }
 
-    fn commit(&mut self, back: usize) -> io::Result<()> {
-        self.last_scan = self
-            .scan
-            .checked_sub(back)
-            .ok_or_else(|| invalid_data(""))?;
-        self.last_pos = self.pos.checked_sub(back).ok_or_else(|| invalid_data(""))?;
+    fn commit(&mut self, back: usize) -> Result<()> {
+        self.last_scan = self.scan.checked_sub(back).context("")?;
+        self.last_pos = self.pos.checked_sub(back).context("")?;
         self.last_offset = (self.pos as isize)
             .checked_sub(self.scan as isize)
-            .ok_or_else(|| invalid_data(""))?;
+            .context("")?;
         Ok(())
     }
 }
