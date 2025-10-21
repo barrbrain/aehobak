@@ -236,37 +236,50 @@ impl<'a> ScanState<'a> {
         Ok(back)
     }
 
-    fn optimize_overlap(&self, mut add: usize, mut back: usize) -> Result<(usize, usize)> {
-        if self.last_scan.checked_add(add).context("")? > self.scan.checked_sub(back).context("")? {
-            let overlap = self.last_scan + add - (self.scan - back);
+    fn optimize_overlap(&self, add: usize, back: usize) -> Result<(usize, usize)> {
+        let last_scan_add = self.last_scan.checked_add(add).context("")?;
+        let scan_back = self.scan.checked_sub(back).context("")?;
 
-            let mut score = 0;
-            let mut best = 0;
-            let mut forward = 0;
-
-            for i in 0..overlap {
-                // Safely compare indices within bounds
-                if self.new.get(self.last_scan + add - overlap + i)
-                    == self.old.get(self.last_pos + add - overlap + i)
-                {
-                    score += 1;
-                }
-
-                if self.new.get(self.scan - back + i) == self.old.get(self.pos - back + i) {
-                    score -= 1;
-                }
-
-                if score > best {
-                    best = score;
-                    forward = i + 1;
-                }
-            }
-
-            add = add + forward - overlap;
-            back -= forward;
+        if last_scan_add <= scan_back {
+            return Ok((add, back));
         }
 
-        Ok((add, back))
+        let overlap = last_scan_add - scan_back;
+        let last_pos_back = self
+            .last_pos
+            .checked_add(add)
+            .and_then(|v| v.checked_sub(overlap))
+            .context("")?;
+        let pos_back = self.pos.checked_sub(back).context("")?;
+
+        let mut score = 0;
+        let mut best = 0;
+        let mut forward = 0;
+
+        // Ensure intermediates fit in i32
+        ensure!(overlap < i32::MAX as usize, "");
+        for i in 0..overlap {
+            // Safely compare indices within bounds
+            if self.new.get(scan_back + i) == self.old.get(last_pos_back + i) {
+                score += 1;
+            }
+
+            if self.new.get(scan_back + i) == self.old.get(pos_back + i) {
+                score -= 1;
+            }
+
+            if score > best {
+                best = score;
+                forward = i + 1;
+            }
+        }
+
+        Ok((
+            add.checked_add(forward)
+                .and_then(|v| v.checked_sub(overlap))
+                .context("")?,
+            back.checked_sub(forward).context("")?,
+        ))
     }
 
     fn calc_copy_seek(&self, add: usize, back: usize) -> Result<(usize, isize)> {
