@@ -45,7 +45,7 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> Result<()> {
         if !scanner.advance()? {
             continue;
         }
-        let (add, back) = scanner.optimize_overlap(scanner.calc_add()?, scanner.calc_back())?;
+        let (add, back) = scanner.optimize_overlap(scanner.calc_add(), scanner.calc_back())?;
         let (copy, seek) = scanner.calc_copy_seek(add, back)?;
 
         let add_u32: u32 = add.try_into()?;
@@ -183,28 +183,31 @@ impl<'a> ScanState<'a> {
         Ok(self.len != score || self.scan == self.new.len())
     }
 
-    fn calc_add(&self) -> Result<usize> {
+    fn calc_add(&self) -> usize {
         let mut add = 0;
         let mut score = 0;
         let mut best = 0;
         let mut i = 0;
 
-        while self.last_scan + i < self.scan && self.last_pos + i < self.old.len() {
+        let limit = (i32::MAX as usize)
+            .min(self.scan - self.last_scan)
+            .min(self.old.len() - self.last_pos);
+        while i < limit {
             if self
                 .old
                 .get(self.last_pos + i)
                 .zip(self.new.get(self.last_scan + i))
-                .is_some_and(|(o, n)| o == n)
+                .is_some_and(|(&o, &n)| o == n)
             {
                 score += 1;
             }
-            i = i.checked_add(1).context("")?;
-            if score * 2 - i as i32 > best * 2 - add as i32 {
+            i += 1;
+            if score - best > (i - add) as i32 - (score - best) {
                 best = score;
                 add = i;
             }
         }
-        Ok(add)
+        add
     }
 
     fn calc_back(&self) -> usize {
