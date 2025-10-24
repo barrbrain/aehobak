@@ -104,7 +104,7 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
     let mut old_cursor: usize = 0;
     let mut copy_cursor: usize = 0;
 
-    let mut window;
+    let mut window = [0; 8];
     let mut delta_pos_buf = [0; 32];
     let mut delta_pos = &mut delta_pos_buf[..0];
     let mut delta_base = 0;
@@ -118,37 +118,19 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
         let mut seeks = [0; 32];
         let mut read;
         let mut tags;
-        tags = if add_tags.len() >= 8 {
-            add_tags
-        } else {
-            window = [0; 8];
-            window[..add_tags.len()].copy_from_slice(add_tags);
-            &window[..]
-        };
+        tags = pad8(&mut window, add_tags);
         read = coder.decode(tags, add_data, &mut adds);
         // SAFETY: This follows from the checked arithmetic above
         debug_assert!(read <= add_data.len());
         unsafe { assert_unchecked(read <= add_data.len()) }
         add_data = &add_data[read..];
-        tags = if copy_tags.len() >= 8 {
-            copy_tags
-        } else {
-            window = [0; 8];
-            window[..copy_tags.len()].copy_from_slice(copy_tags);
-            &window[..]
-        };
+        tags = pad8(&mut window, copy_tags);
         read = coder.decode(tags, copy_data, &mut copies);
         // SAFETY: This follows from the checked arithmetic above
         debug_assert!(read <= copy_data.len());
         unsafe { assert_unchecked(read <= copy_data.len()) }
         copy_data = &copy_data[read..];
-        tags = if seek_tags.len() >= 8 {
-            seek_tags
-        } else {
-            window = [0; 8];
-            window[..seek_tags.len()].copy_from_slice(seek_tags);
-            &window[..]
-        };
+        tags = pad8(&mut window, seek_tags);
         read = coder.decode(tags, seek_data, &mut seeks);
         // SAFETY: This follows from the checked arithmetic above
         debug_assert!(read <= seek_data.len());
@@ -226,4 +208,15 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
         }
     }
     Ok(())
+}
+
+#[inline(always)]
+fn pad8<'a>(window: &'a mut [u8; 8], add_tags: &'a [u8]) -> &'a [u8] {
+    if add_tags.len() >= 8 {
+        add_tags
+    } else {
+        *window = [0; 8];
+        window[..add_tags.len()].copy_from_slice(add_tags);
+        window
+    }
 }
