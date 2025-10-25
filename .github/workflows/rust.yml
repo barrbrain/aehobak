@@ -30,6 +30,7 @@ jobs:
           cargo llvm-cov clean
           result=0
           cargo nextest run --no-fail-fast || result=$?
+          cargo test  --doc --no-fail-fast || result=$?
           cargo llvm-cov report --cobertura --output-path ./codecov.xml || result=$?
           mv target/nextest/default/test-results.xml ./test-results.xml
           exit $result
