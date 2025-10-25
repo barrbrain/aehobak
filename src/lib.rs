@@ -167,10 +167,10 @@ mod tests {
             let mut encoded = Vec::with_capacity(new.len());
             diff(&old, &new, &mut encoded).unwrap();
             let mut bspatch = Vec::new();
-            let mut bsencoded = Vec::new();
+            let mut decoded = Vec::new();
             bsdiff::diff(&old, &new, &mut bspatch).unwrap();
-            encode(&bspatch, &mut bsencoded).unwrap();
-            TestResult::from_bool(encoded == bsencoded)
+            decode(&mut encoded.as_slice(), &mut decoded).unwrap();
+            TestResult::from_bool(decoded == bspatch)
         }
     }
 
