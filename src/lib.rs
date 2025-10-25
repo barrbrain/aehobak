@@ -41,6 +41,8 @@ mod tests {
     use super::*;
     use bsdiff;
     use quickcheck::{quickcheck, TestResult};
+    use rand_xoshiro::rand_core::{RngCore, SeedableRng};
+    use rand_xoshiro::Xoshiro256Plus;
     use std::collections::LinkedList;
 
     quickcheck! {
@@ -84,6 +86,38 @@ mod tests {
             result == new
         }
 
+        fn direct_patch_truncated(old: Vec<u8>, idx: usize, sub: usize) -> bool {
+            let mut new = old.clone();
+            if !new.is_empty() {
+                let idx = idx % new.len();
+                new[idx] = new[idx].wrapping_add(1);
+            }
+            let mut bspatch = Vec::new();
+            let mut encoded = Vec::new();
+            let mut result = Vec::with_capacity(new.len());
+            bsdiff::diff(&old, &new, &mut bspatch).unwrap();
+            encode(&bspatch, &mut encoded).unwrap();
+            if encoded.is_empty() {
+                return true;
+            }
+            encoded.truncate(encoded.len().saturating_sub(sub.max(1)).max(1));
+            patch(&old, &encoded, &mut result).is_err() || new.is_empty()
+        }
+
+        fn direct_patch_nospace(old: Vec<u8>, idx: usize) -> bool {
+            let mut new = old.clone();
+            if !new.is_empty() {
+                let idx = idx % new.len();
+                new[idx] = new[idx].wrapping_add(1);
+            }
+            let mut bspatch = Vec::new();
+            let mut encoded = Vec::new();
+            let mut result = Vec::with_capacity(new.len() / 2);
+            bsdiff::diff(&old, &new, &mut bspatch).unwrap();
+            encode(&bspatch, &mut encoded).unwrap();
+            patch(&old, &encoded, &mut result).is_err() || new.len() < 2
+        }
+
         fn direct_diff(old: Vec<u8>, idx: usize) -> bool {
             let mut new = old.clone();
             if !new.is_empty() {
@@ -99,9 +133,20 @@ mod tests {
             patch == encoded
         }
 
-        fn arbitrary_patch(skeleton: LinkedList<(u8,u8,i8)>, period: u8) -> bool {
+        fn direct_diff_nospace(old: Vec<u8>, idx: usize) -> TestResult {
+            let mut new = old.clone();
+            if new.is_empty() {
+                return TestResult::discard();
+            }
+            let idx = idx % new.len();
+            new[idx] = new[idx].wrapping_add(1);
+            let mut patch:[u8; 0] = [];
+            TestResult::from_bool(diff(&old, &new, &mut patch.as_mut_slice()).is_err())
+        }
+
+        fn arbitrary_patch(skeleton: LinkedList<(u8,u8,i8)>, period: u8, phase: u8) -> bool {
             use std::io::ErrorKind::{InvalidData, UnexpectedEof};
-            let (bspatch, old_len, new_len) = gen_bspatch(skeleton, period);
+            let (bspatch, old_len, new_len) = gen_bspatch(skeleton, period, phase);
             let mut encoded = Vec::new();
             let mut result = Vec::with_capacity(new_len);
             let old = vec![0; old_len];
@@ -118,37 +163,80 @@ mod tests {
             }
         }
 
-        fn arbitrary_diff(skeleton: LinkedList<(u8,u8,i8)>, period: u8) -> TestResult {
-            use rand_xoshiro::rand_core::{RngCore, SeedableRng};
-            use rand_xoshiro::Xoshiro256Plus;
-            let (old, new) = {
-                let (bspatch, old_len, new_len) = gen_bspatch(skeleton, period);
-                let mut new = Vec::with_capacity(new_len);
-                let mut old = vec![0; old_len];
-                let mut rng = Xoshiro256Plus::seed_from_u64(0xeba2fa67e5a81121);
-                rng.fill_bytes(&mut old);
-                if bsdiff::patch(&old, &mut bspatch.as_slice(), &mut new).is_err() {
-                    return TestResult::discard();
+        fn arbitrary_diff(skeleton: LinkedList<(u8,u8,i8)>, period: u8, phase: u8) -> TestResult {
+            if let Some((old, new)) = gen_old_new(skeleton, period, phase) {
+                let mut encoded = Vec::with_capacity(new.len());
+                if diff(&old, &new, &mut encoded).is_err() {
+                    return TestResult::failed();
                 }
-                (old, new)
-            };
-            let mut encoded = Vec::with_capacity(new.len());
-            diff(&old, &new, &mut encoded).unwrap();
-            let mut bspatch = Vec::new();
-            let mut bsencoded = Vec::new();
-            bsdiff::diff(&old, &new, &mut bspatch).unwrap();
-            encode(&bspatch, &mut bsencoded).unwrap();
-            TestResult::from_bool(encoded == bsencoded)
+                let mut bspatch = Vec::new();
+                let mut decoded = Vec::new();
+                bsdiff::diff(&old, &new, &mut bspatch).unwrap();
+                decode(&mut encoded.as_slice(), &mut decoded).unwrap();
+                TestResult::from_bool(decoded == bspatch)
+            } else {
+                TestResult::discard()
+            }
         }
     }
 
-    fn gen_bspatch(skeleton: LinkedList<(u8, u8, i8)>, period: u8) -> (Vec<u8>, usize, usize) {
+    #[test]
+    fn direct_diff_huge() {
+        let mut old = Vec::with_capacity(i32::MAX as usize + 1);
+        old.resize(old.capacity(), 0);
+        let mut patch = Vec::new();
+        assert!(diff(&old, &old, &mut patch.as_mut_slice()).is_err());
+    }
+
+    #[test]
+    fn arbitrary_diff_vectors() {
+        #[rustfmt::skip]
+        let skeleton: Vec<(u8, i8)> = vec![
+            (208, -5), (167, -8), (246, 46), (155, -30), (180, 112), (219, 0), (220, -81),
+            (170, 3), (223, 49), (29, 57), (144, 56), (169, 100), (170, -105), (147, 121),
+            (74, 1), (125, -99), (214, 115), (9, 73), (114, 123), (9, 80), (9, 0)
+        ];
+        let skeleton = skeleton.into_iter().map(|(a, b)| (a, 0, b)).collect();
+        let period = 20;
+        let phase = 0;
+        let (old, new) = gen_old_new(skeleton, period, phase).unwrap();
+        let mut encoded = Vec::with_capacity(new.len());
+        diff(&old, &new, &mut encoded).unwrap();
+        let mut bspatch = Vec::new();
+        let mut decoded = Vec::new();
+        bsdiff::diff(&old, &new, &mut bspatch).unwrap();
+        decode(&mut encoded.as_slice(), &mut decoded).unwrap();
+        assert!(decoded == bspatch)
+    }
+
+    fn gen_old_new(
+        skeleton: LinkedList<(u8, u8, i8)>,
+        period: u8,
+        phase: u8,
+    ) -> Option<(Vec<u8>, Vec<u8>)> {
+        let (bspatch, old_len, new_len) = gen_bspatch(skeleton, period, phase);
+        let mut new = Vec::with_capacity(new_len);
+        let mut old = vec![0; old_len];
+        let mut rng = Xoshiro256Plus::seed_from_u64(0xeba2fa67e5a81121);
+        rng.fill_bytes(&mut old);
+        if bsdiff::patch(&old, &mut bspatch.as_slice(), &mut new).is_err() {
+            return None;
+        }
+        Some((old, new))
+    }
+
+    fn gen_bspatch(
+        skeleton: LinkedList<(u8, u8, i8)>,
+        period: u8,
+        phase: u8,
+    ) -> (Vec<u8>, usize, usize) {
         use crate::control::{Aehobak, Bsdiff};
         let mut bspatch = Vec::new();
-        let mut diffs = 0;
+        let mut diffs = phase as usize;
         let mut old_len = 0;
         let mut new_len = 0;
         let mut cursor = 0;
+        let mut rng = Xoshiro256Plus::seed_from_u64(0x75efdb1b26806fd8);
         for (add, copy, seek) in skeleton {
             let (add, copy, seek) = (add as u32, copy as u32, seek as i32);
             let seek = (seek << 1 ^ seek >> 31) as u32;
@@ -162,7 +250,9 @@ mod tests {
             cursor += add as usize;
             old_len = old_len.max(cursor);
             cursor = (cursor as i64 + seek as i64).max(0) as usize;
-            bspatch.resize(bspatch.len() + copy as usize, 0);
+            let bspatch_len = bspatch.len();
+            bspatch.resize(bspatch_len + copy as usize, 0);
+            rng.fill_bytes(&mut bspatch[bspatch_len..]);
             new_len += copy as usize + add as usize;
         }
         (bspatch, old_len, new_len)
