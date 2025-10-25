@@ -24,6 +24,9 @@ lz4_flex = "0.11.3"
 quickcheck = "1.0.3"
 rand_xoshiro = "0.7.0"
 
+[profile.test]
+opt-level = 2
+
 [[bench]]
 name = "patch"
 harness = false
