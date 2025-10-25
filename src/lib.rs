@@ -84,6 +84,38 @@ mod tests {
             result == new
         }
 
+        fn direct_patch_truncated(old: Vec<u8>, idx: usize, sub: usize) -> bool {
+            let mut new = old.clone();
+            if !new.is_empty() {
+                let idx = idx % new.len();
+                new[idx] = new[idx].wrapping_add(1);
+            }
+            let mut bspatch = Vec::new();
+            let mut encoded = Vec::new();
+            let mut result = Vec::with_capacity(new.len());
+            bsdiff::diff(&old, &new, &mut bspatch).unwrap();
+            encode(&bspatch, &mut encoded).unwrap();
+            if encoded.is_empty() {
+                return true;
+            }
+            encoded.truncate(encoded.len().saturating_sub(sub.max(1)).max(1));
+            patch(&old, &encoded, &mut result).is_err() || new.is_empty()
+        }
+
+        fn direct_patch_nospace(old: Vec<u8>, idx: usize) -> bool {
+            let mut new = old.clone();
+            if !new.is_empty() {
+                let idx = idx % new.len();
+                new[idx] = new[idx].wrapping_add(1);
+            }
+            let mut bspatch = Vec::new();
+            let mut encoded = Vec::new();
+            let mut result = Vec::with_capacity(new.len() / 2);
+            bsdiff::diff(&old, &new, &mut bspatch).unwrap();
+            encode(&bspatch, &mut encoded).unwrap();
+            patch(&old, &encoded, &mut result).is_err() || new.len() < 2
+        }
+
         fn direct_diff(old: Vec<u8>, idx: usize) -> bool {
             let mut new = old.clone();
             if !new.is_empty() {
