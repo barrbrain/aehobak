@@ -16,15 +16,51 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - name: Build
-        run: RUSTFLAGS='-D warnings' cargo build --verbose
-      - name: Run tests
+      - uses: Swatinem/rust-cache@v2
+      - name: Build check
+        run: RUSTFLAGS='-D warnings' cargo check
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@cargo-nextest
+      - name: Run tests with coverage
         env:
           QUICKCHECK_TESTS: 5000
-        run: cargo test --verbose
+        run: |
+          set -euxo pipefail
+          source <(cargo llvm-cov show-env --export-prefix)
+          cargo llvm-cov clean
+          result=0
+          cargo nextest run --no-fail-fast || result=$?
+          cargo llvm-cov report --cobertura --output-path ./codecov.xml || result=$?
+          mv target/nextest/default/test-results.xml ./test-results.xml
+          exit $result
       - name: Clippy
         run: cargo clippy -- -D warnings
       - name: Bench
         env:
           RUSTFLAGS: '-C target-cpu=x86-64-v3'
         run: cargo bench
+      - name: "Upload test results"
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-reports
+          path: test-results.xml
+      - name: "Generate code coverage report"
+        uses: clearlyip/code-coverage-report-action@v6
+        if: always()
+        id: "code_coverage_report"
+        with:
+          artifact_download_workflow_names: "Rust"
+          artifact_name: coverage-%name%
+          filename: codecov.xml
+          overall_coverage_fail_threshold: 97
+          only_list_changed_files: ${{ github.event_name == 'pull_request' }}
+          fail_on_negative_difference: true
+          negative_difference_by: "overall"
+          negative_difference_threshold: 1
+      - name: "Upload code coverage report"
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: codecov-reports
+          path: code-coverage-results.md
