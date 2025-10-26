@@ -32,8 +32,13 @@ use std::io::Write;
 /// Directly generate a compact representation of bsdiff output.
 /// If numeric limits are reached, the error will be wrapped with `io::Error`.
 pub fn diff<T: Write>(old: &[u8], new: &[u8], writer: &mut T) -> io::Result<()> {
-    // TODO: Unwrap `io::Result` in `anyhow::Result`
-    diff_internal(old, new, writer).map_err(io::Error::other)
+    match diff_internal(old, new, writer) {
+        Ok(_) => Ok(()),
+        Err(e) => match e.downcast::<io::Error>() {
+            Ok(e) => Err(e),
+            Err(e) => Err(io::Error::other(e)),
+        },
+    }
 }
 
 fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> Result<()> {
