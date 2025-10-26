@@ -131,9 +131,9 @@ mod tests {
             patch == encoded
         }
 
-        fn arbitrary_patch(skeleton: LinkedList<(u8,u8,i8)>, period: u8) -> bool {
+        fn arbitrary_patch(skeleton: LinkedList<(u8,u8,i8)>, period: u8, phase: u8) -> bool {
             use std::io::ErrorKind::{InvalidData, UnexpectedEof};
-            let (bspatch, old_len, new_len) = gen_bspatch(skeleton, period);
+            let (bspatch, old_len, new_len) = gen_bspatch(skeleton, period, phase);
             let mut encoded = Vec::new();
             let mut result = Vec::with_capacity(new_len);
             let old = vec![0; old_len];
@@ -150,11 +150,11 @@ mod tests {
             }
         }
 
-        fn arbitrary_diff(skeleton: LinkedList<(u8,u8,i8)>, period: u8) -> TestResult {
+        fn arbitrary_diff(skeleton: LinkedList<(u8,u8,i8)>, period: u8, phase: u8) -> TestResult {
             use rand_xoshiro::rand_core::{RngCore, SeedableRng};
             use rand_xoshiro::Xoshiro256Plus;
             let (old, new) = {
-                let (bspatch, old_len, new_len) = gen_bspatch(skeleton, period);
+                let (bspatch, old_len, new_len) = gen_bspatch(skeleton, period, phase);
                 let mut new = Vec::with_capacity(new_len);
                 let mut old = vec![0; old_len];
                 let mut rng = Xoshiro256Plus::seed_from_u64(0xeba2fa67e5a81121);
@@ -174,10 +174,14 @@ mod tests {
         }
     }
 
-    fn gen_bspatch(skeleton: LinkedList<(u8, u8, i8)>, period: u8) -> (Vec<u8>, usize, usize) {
+    fn gen_bspatch(
+        skeleton: LinkedList<(u8, u8, i8)>,
+        period: u8,
+        phase: u8,
+    ) -> (Vec<u8>, usize, usize) {
         use crate::control::{Aehobak, Bsdiff};
         let mut bspatch = Vec::new();
-        let mut diffs = 0;
+        let mut diffs = phase as usize;
         let mut old_len = 0;
         let mut new_len = 0;
         let mut cursor = 0;
