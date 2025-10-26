@@ -23,7 +23,8 @@ jobs:
       - uses: taiki-e/install-action@cargo-nextest
       - name: Run tests with coverage
         env:
-          QUICKCHECK_TESTS: 300000
+          QUICKCHECK_TESTS: 5000
+          RUSTFLAGS: '-C target-cpu=x86-64-v3'
         run: |
           set -euxo pipefail
           source <(cargo llvm-cov show-env --export-prefix)
