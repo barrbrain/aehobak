@@ -131,6 +131,17 @@ mod tests {
             patch == encoded
         }
 
+        fn direct_diff_nospace(old: Vec<u8>, idx: usize) -> TestResult {
+            let mut new = old.clone();
+            if new.is_empty() {
+                return TestResult::discard();
+            }
+            let idx = idx % new.len();
+            new[idx] = new[idx].wrapping_add(1);
+            let mut patch:[u8; 0] = [];
+            TestResult::from_bool(diff(&old, &new, &mut patch.as_mut_slice()).is_err())
+        }
+
         fn arbitrary_patch(skeleton: LinkedList<(u8,u8,i8)>, period: u8, phase: u8) -> bool {
             use std::io::ErrorKind::{InvalidData, UnexpectedEof};
             let (bspatch, old_len, new_len) = gen_bspatch(skeleton, period, phase);
@@ -163,6 +174,14 @@ mod tests {
                 TestResult::discard()
             }
         }
+    }
+
+    #[test]
+    fn direct_diff_huge() {
+        let mut old = Vec::with_capacity(i32::MAX as usize + 1);
+        old.resize(old.capacity(), 0);
+        let mut patch = Vec::new();
+        assert!(diff(&old, &old, &mut patch.as_mut_slice()).is_err());
     }
 
     #[test]
