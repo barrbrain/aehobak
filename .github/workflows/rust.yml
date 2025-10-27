@@ -19,6 +19,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build check
         run: RUSTFLAGS='-D warnings' cargo check
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+  test:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: taiki-e/install-action@cargo-nextest
       - name: Run tests with coverage
@@ -34,12 +44,6 @@ jobs:
           cargo llvm-cov report --cobertura --output-path ./codecov.xml || result=$?
           mv target/nextest/default/test-results.xml ./test-results.xml
           exit $result
-      - name: Clippy
-        run: cargo clippy -- -D warnings
-      - name: Bench
-        env:
-          RUSTFLAGS: '-C target-cpu=x86-64-v3'
-        run: cargo bench
       - name: "Upload test results"
         uses: actions/upload-artifact@v4
         if: always()
@@ -65,3 +69,15 @@ jobs:
         with:
           name: codecov-reports
           path: code-coverage-results.md
+
+  bench:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Bench
+        env:
+          RUSTFLAGS: '-C target-cpu=x86-64-v3'
+        run: cargo bench
