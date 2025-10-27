@@ -41,6 +41,8 @@ mod tests {
     use super::*;
     use bsdiff;
     use quickcheck::{quickcheck, TestResult};
+    use rand_xoshiro::rand_core::{RngCore, SeedableRng};
+    use rand_xoshiro::Xoshiro256Plus;
     use std::collections::LinkedList;
 
     quickcheck! {
@@ -164,7 +166,9 @@ mod tests {
         fn arbitrary_diff(skeleton: LinkedList<(u8,u8,i8)>, period: u8, phase: u8) -> TestResult {
             if let Some((old, new)) = gen_old_new(skeleton, period, phase) {
                 let mut encoded = Vec::with_capacity(new.len());
-                diff(&old, &new, &mut encoded).unwrap();
+                if diff(&old, &new, &mut encoded).is_err() {
+                    return TestResult::failed();
+                }
                 let mut bspatch = Vec::new();
                 let mut decoded = Vec::new();
                 bsdiff::diff(&old, &new, &mut bspatch).unwrap();
@@ -187,16 +191,15 @@ mod tests {
     #[test]
     fn arbitrary_diff_vectors() {
         #[rustfmt::skip]
-        let skeleton: Vec<(u8, u8, i8)> = vec![
-            (12, 0, 85), (53, 0, -91), (39, 0, 23), (200, 0, 4), (247, 0, 62), (141, 0, 55), (167, 0, -4), (183, 0, -46), (244, 0, -28),
-            (66, 0, 127), (211, 0, 2), (84, 0, 95), (219, 0, 0), (86, 0, 66), (248, 0, 103), (169, 0, -33), (84, 0, 112), (174, 0, 116),
-            (110, 0, -111), (48, 0, 54), (64, 0, -23), (255, 0, -106), (105, 0, -69), (91, 0, 53), (168, 0, -29), (224, 0, -78),
-            (222, 0, -122), (135, 0, -10), (230, 0, 40), (195, 0, -29), (193, 0, 97), (28, 0, -9), (206, 0, 118), (110, 0, 123),
-            (219, 0, 43), (255, 0, 120), (1, 0, -121), (154, 0, -10), (213, 0, 62), (144, 0, -25), (1, 0, -81), (225, 0, 42), (9, 0, 0)
+        let skeleton: Vec<(u8, i8)> = vec![
+            (208, -5), (167, -8), (246, 46), (155, -30), (180, 112), (219, 0), (220, -81),
+            (170, 3), (223, 49), (29, 57), (144, 56), (169, 100), (170, -105), (147, 121),
+            (74, 1), (125, -99), (214, 115), (9, 73), (114, 123), (9, 80), (9, 0)
         ];
-        let period = 12;
-        let phase = 8;
-        let (old, new) = gen_old_new(skeleton.into_iter().collect(), period, phase).unwrap();
+        let skeleton = skeleton.into_iter().map(|(a, b)| (a, 0, b)).collect();
+        let period = 20;
+        let phase = 0;
+        let (old, new) = gen_old_new(skeleton, period, phase).unwrap();
         let mut encoded = Vec::with_capacity(new.len());
         diff(&old, &new, &mut encoded).unwrap();
         let mut bspatch = Vec::new();
@@ -211,8 +214,6 @@ mod tests {
         period: u8,
         phase: u8,
     ) -> Option<(Vec<u8>, Vec<u8>)> {
-        use rand_xoshiro::rand_core::{RngCore, SeedableRng};
-        use rand_xoshiro::Xoshiro256Plus;
         let (bspatch, old_len, new_len) = gen_bspatch(skeleton, period, phase);
         let mut new = Vec::with_capacity(new_len);
         let mut old = vec![0; old_len];
@@ -235,6 +236,7 @@ mod tests {
         let mut old_len = 0;
         let mut new_len = 0;
         let mut cursor = 0;
+        let mut rng = Xoshiro256Plus::seed_from_u64(0x75efdb1b26806fd8);
         for (add, copy, seek) in skeleton {
             let (add, copy, seek) = (add as u32, copy as u32, seek as i32);
             let seek = (seek << 1 ^ seek >> 31) as u32;
@@ -248,7 +250,9 @@ mod tests {
             cursor += add as usize;
             old_len = old_len.max(cursor);
             cursor = (cursor as i64 + seek as i64).max(0) as usize;
-            bspatch.resize(bspatch.len() + copy as usize, 0);
+            let bspatch_len = bspatch.len();
+            bspatch.resize(bspatch_len + copy as usize, 0);
+            rng.fill_bytes(&mut bspatch[bspatch_len..]);
             new_len += copy as usize + add as usize;
         }
         (bspatch, old_len, new_len)
