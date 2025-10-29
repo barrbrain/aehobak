@@ -18,15 +18,14 @@ streamvbyte64 = "0.2.0"
 
 [dev-dependencies]
 bsdiff = "0.2.1"
-criterion = "0.5.1"
+gungraun = "0.17.0"
 lz4_flex = "0.11.3"
 quickcheck = "1.0.3"
 rand_xoshiro = "0.7.0"
 
-[[bench]]
-name = "patch"
-harness = false
+[lib]
+bench = false
 
 [[bench]]
-name = "diff"
+name = "all"
 harness = false

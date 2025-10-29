@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
       - name: Build check
         run: RUSTFLAGS='-D warnings' cargo check
@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: taiki-e/install-action@cargo-nextest
@@ -75,9 +75,29 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: gungraun-runner
+      - name: Install Valgrind
+        run: sudo apt-get install -y valgrind
       - uses: Swatinem/rust-cache@v2
-      - name: Bench
+      - run: git checkout HEAD^
+      - name: Bench (baseline)
+        run: cargo bench
         env:
           RUSTFLAGS: '-C target-cpu=x86-64-v3'
-        run: cargo bench
+      - run: git checkout HEAD@{1}
+      - name: Bench (reference)
+        run: |
+          cargo bench -- --output-format=json |
+          jq -s > bench-results.json
+        env:
+          RUSTFLAGS: '-C target-cpu=x86-64-v3'
+      - name: Render to markdown
+        run: |
+          python3 .github/workflows/bench-summary.py < bench-results.json |
+          tee "$GITHUB_STEP_SUMMARY"
