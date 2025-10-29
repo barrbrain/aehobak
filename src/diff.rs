@@ -72,16 +72,16 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> Result<()> {
 
 fn sais(old: &[u8]) -> Result<Box<[i32]>> {
     use core::ptr::null_mut;
-    use libsais_sys::libsais::libsais;
+    use libsais_sys::libsais64::libsais64;
     ensure!(old.len() <= i32::MAX as usize, "input too large");
     let mut sa = Vec::with_capacity(old.len() + 1);
-    let len = old.len() as i32;
+    let len = old.len() as i64;
     sa.push(len);
     let sa_1 = &mut sa[1..];
-    let ret = unsafe { libsais(old.as_ptr(), sa_1.as_mut_ptr(), len, 0, null_mut()) };
+    let ret = unsafe { libsais64(old.as_ptr(), sa_1.as_mut_ptr(), len, 0, null_mut()) };
     ensure!(ret == 0, "libsais failed");
     unsafe { sa.set_len(old.len() + 1) };
-    Ok(sa.into_boxed_slice())
+    Ok(sa.iter().map(|&i| i as i32).collect())
 }
 
 #[inline(always)]
