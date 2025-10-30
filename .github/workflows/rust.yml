@@ -25,6 +25,9 @@ jobs:
   test:
 
     runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      pull-requests: write
 
     steps:
       - uses: actions/checkout@v5
@@ -69,10 +72,25 @@ jobs:
         with:
           name: codecov-reports
           path: code-coverage-results.md
+      - name: Post summary to PR
+        uses: actions/github-script@v8
+        if: always() && github.event_name == 'pull_request'
+        with:
+          script: |
+            const fs = require('fs');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: fs.readFileSync('code-coverage-results.md', 'utf8'),
+            })
 
   bench:
 
     runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      pull-requests: write
 
     steps:
       - uses: actions/checkout@v5
@@ -83,7 +101,7 @@ jobs:
         with:
           tool: gungraun-runner
       - name: Install Valgrind
-        run: sudo apt-get install -y valgrind
+        run: sudo apt-get install -y valgrind --no-install-recommends
       - uses: Swatinem/rust-cache@v2
       - run: git checkout HEAD^
       - name: Bench (baseline)
@@ -98,6 +116,19 @@ jobs:
         env:
           RUSTFLAGS: '-C target-cpu=x86-64-v3'
       - name: Render to markdown
+        if: always()
         run: |
           python3 .github/workflows/bench-summary.py < bench-results.json |
-          tee "$GITHUB_STEP_SUMMARY"
+          tee bench-results.md "$GITHUB_STEP_SUMMARY"
+      - name: Post summary to PR
+        uses: actions/github-script@v8
+        if: always() && github.event_name == 'pull_request'
+        with:
+          script: |
+            const fs = require('fs');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: fs.readFileSync('bench-results.md', 'utf8'),
+            })
