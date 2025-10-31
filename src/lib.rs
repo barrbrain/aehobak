@@ -124,13 +124,13 @@ mod tests {
                 let idx = idx % new.len();
                 new[idx] = new[idx].wrapping_add(1);
             }
-            let mut bspatch = Vec::new();
             let mut encoded = Vec::new();
-            let mut patch = Vec::with_capacity(new.len());
-            bsdiff::diff(&old, &new, &mut bspatch).unwrap();
-            encode(&bspatch, &mut encoded).unwrap();
-            diff(&old, &new, &mut patch).unwrap();
-            patch == encoded
+            diff(&old, &new, &mut encoded).unwrap();
+            let mut result = Vec::with_capacity(new.len());
+            let mut decoded = Vec::new();
+            decode(&mut encoded.as_slice(), &mut decoded).unwrap();
+            bsdiff::patch(&old, &mut decoded.as_slice(), &mut result).unwrap();
+            result == new
         }
 
         fn direct_diff_nospace(old: Vec<u8>, idx: usize) -> TestResult {
@@ -169,11 +169,11 @@ mod tests {
                 if diff(&old, &new, &mut encoded).is_err() {
                     return TestResult::failed();
                 }
-                let mut bspatch = Vec::new();
+                let mut result = Vec::with_capacity(new.len());
                 let mut decoded = Vec::new();
-                bsdiff::diff(&old, &new, &mut bspatch).unwrap();
                 decode(&mut encoded.as_slice(), &mut decoded).unwrap();
-                TestResult::from_bool(decoded == bspatch)
+                bsdiff::patch(&old, &mut decoded.as_slice(), &mut result).unwrap();
+                TestResult::from_bool(result == new)
             } else {
                 TestResult::discard()
             }
@@ -202,11 +202,9 @@ mod tests {
         let (old, new) = gen_old_new(skeleton, period, phase).unwrap();
         let mut encoded = Vec::with_capacity(new.len());
         diff(&old, &new, &mut encoded).unwrap();
-        let mut bspatch = Vec::new();
-        let mut decoded = Vec::new();
-        bsdiff::diff(&old, &new, &mut bspatch).unwrap();
-        decode(&mut encoded.as_slice(), &mut decoded).unwrap();
-        assert!(decoded == bspatch)
+        let mut result = Vec::with_capacity(new.len());
+        patch(&old, &encoded, &mut result).unwrap();
+        assert!(result == new)
     }
 
     fn gen_old_new(

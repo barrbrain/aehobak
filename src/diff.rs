@@ -74,13 +74,12 @@ fn sais(old: &[u8]) -> Result<Box<[i32]>> {
     use core::ptr::null_mut;
     use libsais_sys::libsais::libsais;
     ensure!(old.len() <= i32::MAX as usize, "input too large");
-    let mut sa = Vec::with_capacity(old.len() + 1);
+    let mut sa = Vec::with_capacity(old.len());
     let len = old.len() as i32;
-    sa.push(len);
-    let sa_1 = &mut sa[1..];
-    let ret = unsafe { libsais(old.as_ptr(), sa_1.as_mut_ptr(), len, 0, null_mut()) };
+    let sa_0 = &mut sa[..];
+    let ret = unsafe { libsais(old.as_ptr(), sa_0.as_mut_ptr(), len, 0, null_mut()) };
     ensure!(ret == 0, "libsais failed");
-    unsafe { sa.set_len(old.len() + 1) };
+    unsafe { sa.set_len(old.len()) };
     Ok(sa.into_boxed_slice())
 }
 
@@ -140,6 +139,10 @@ impl<'a> ScanState<'a> {
             } else {
                 &sa[..=pos]
             };
+        }
+
+        if sa.is_empty() {
+            return Ok((self.sa.len(), 0));
         }
 
         let a_start = sa
