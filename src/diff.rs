@@ -70,17 +70,45 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> Result<()> {
     Ok(())
 }
 
-fn sais(old: &[u8]) -> Result<Box<[i32]>> {
+const BLOCK: usize = 1 << 14;
+
+fn sais(old: &[u8]) -> Result<Box<[u16]>> {
     use core::ptr::null_mut;
     use libsais_sys::libsais::libsais;
     ensure!(old.len() <= i32::MAX as usize, "input too large");
-    let mut sa = Vec::with_capacity(old.len());
-    let len = old.len() as i32;
-    let sa_0 = &mut sa[..];
-    let ret = unsafe { libsais(old.as_ptr(), sa_0.as_mut_ptr(), len, 0, null_mut()) };
-    ensure!(ret == 0, "libsais failed");
-    unsafe { sa.set_len(old.len()) };
+    let mut sa: Vec<u16> = Vec::with_capacity(old.len() * 2);
+    for start in (0..old.len()).step_by(BLOCK) {
+        let len = (old.len() - start).min(BLOCK);
+        let ret = unsafe {
+            libsais(
+                old.as_ptr().add(start),
+                sa.as_mut_ptr().add(start) as *mut _,
+                len as i32,
+                0,
+                null_mut(),
+            )
+        };
+        unsafe { sa.set_len(start + len * 2) };
+        sais_block_filter(&mut sa[start..]);
+        unsafe { sa.set_len(start + len) };
+        if start + len < old.len() {
+            sa[start..].sort_by_key(|&k| &old[start + k as usize..]);
+        }
+        ensure!(ret == 0, "libsais failed");
+    }
+    assert!(sa.len() == old.len());
     Ok(sa.into_boxed_slice())
+}
+
+fn sais_block_filter(sa: &mut [u16]) {
+    let p = sa.as_mut_ptr();
+    let q = p as *mut i32;
+    unsafe {
+        for i in 0..sa.len() / 2 {
+            let v = *q.add(i);
+            *p.add(i) = v as u16;
+        }
+    }
 }
 
 #[inline(always)]
@@ -89,7 +117,7 @@ fn mismatch(old: &[u8], new: &[u8]) -> usize {
 }
 
 struct ScanState<'a> {
-    sa: &'a [i32],
+    sa: &'a [u16],
     old: &'a [u8],
     new: &'a [u8],
     scan: usize,
@@ -102,7 +130,7 @@ struct ScanState<'a> {
 
 impl<'a> ScanState<'a> {
     #[inline(always)]
-    fn new(old: &'a [u8], new: &'a [u8], sa: &'a [i32]) -> Self {
+    fn new(old: &'a [u8], new: &'a [u8], sa: &'a [u16]) -> Self {
         Self {
             sa,
             old,
@@ -122,15 +150,22 @@ impl<'a> ScanState<'a> {
     }
 
     fn find_best_match(&self) -> Result<(usize, usize)> {
-        let mut sa = self.sa;
+        let mut ret = (self.sa.len(), 0);
+        for (i, sa) in self.sa.chunks(BLOCK).enumerate() {
+            let v = self.find_best_match_inner(i * BLOCK, sa)?;
+            if v.1 >= ret.1 {
+                ret = v;
+            }
+        }
+        Ok(ret)
+    }
+
+    fn find_best_match_inner(&self, start: usize, mut sa: &[u16]) -> Result<(usize, usize)> {
         let new = self.new.get(self.scan..).context("")?;
 
         while sa.len() > 2 {
             let pos = (sa.len() - 1) / 2;
-            let old_start = sa
-                .get(pos)
-                .and_then(|&p| usize::try_from(p).ok())
-                .context("")?;
+            let old_start = sa.get(pos).map(|&p| usize::from(p)).context("")? + start;
             let old_slice = self.old.get(old_start..).context("")?;
 
             let len = old_slice.len().min(new.len());
@@ -141,18 +176,8 @@ impl<'a> ScanState<'a> {
             };
         }
 
-        if sa.is_empty() {
-            return Ok((self.sa.len(), 0));
-        }
-
-        let a_start = sa
-            .first()
-            .and_then(|&p| usize::try_from(p).ok())
-            .context("")?;
-        let b_start = sa
-            .last()
-            .and_then(|&p| usize::try_from(p).ok())
-            .context("")?;
+        let a_start = sa.first().map(|&p| usize::from(p)).context("")? + start;
+        let b_start = sa.last().map(|&p| usize::from(p)).context("")? + start;
         let a = mismatch(self.old.get(a_start..).context("")?, new);
         let b = mismatch(self.old.get(b_start..).context("")?, new);
 
