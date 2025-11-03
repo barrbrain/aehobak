@@ -70,7 +70,7 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> Result<()> {
     Ok(())
 }
 
-const BLOCK: usize = 1 << 14;
+const BLOCK: usize = 1 << 13;
 
 fn sais(old: &[u8]) -> Result<Box<[u16]>> {
     use core::ptr::null_mut;
@@ -78,6 +78,7 @@ fn sais(old: &[u8]) -> Result<Box<[u16]>> {
     ensure!(old.len() <= i32::MAX as usize, "input too large");
     let mut sa: Vec<u16> = Vec::with_capacity(old.len());
     let mut tmp: Vec<i32> = Vec::with_capacity(old.len().min(BLOCK));
+    let mut rank: Vec<u16> = Vec::with_capacity(BLOCK);
     for start in (0..old.len()).step_by(BLOCK).rev() {
         let old_suffix = &old[start..];
         let len = (old.len() - start).min(BLOCK);
@@ -103,11 +104,38 @@ fn sais(old: &[u8]) -> Result<Box<[u16]>> {
             std::slice::from_raw_parts_mut(sa_ptr, len)
         };
 
-        if len < old_suffix.len() {
+        if rank.len() == BLOCK {
+            debug_assert!(start + len + BLOCK <= old.len());
+            sa_slice.sort_by(|&a, &b| {
+                let (a, b) = (a as usize, b as usize);
+                let min = a.min(b);
+                let len = BLOCK - min;
+                // SAFETY: Suffix array elements; a, b < BLOCK
+                unsafe {
+                    (
+                        old_suffix.get_unchecked(a..a + len),
+                        rank.get_unchecked(a - min),
+                    )
+                        .cmp(&(
+                            old_suffix.get_unchecked(b..b + len),
+                            rank.get_unchecked(b - min),
+                        ))
+                }
+            });
+        } else if len < old_suffix.len() {
             sa_slice.sort_by_key(|&k| {
                 // SAFETY: A suffix array element, k < len
                 unsafe { old_suffix.get_unchecked(k as usize..) }
             });
+        }
+        if len == BLOCK && start != 0 {
+            unsafe {
+                let rank_ptr = rank.as_mut_ptr();
+                for (i, &s) in sa_slice.iter().enumerate() {
+                    std::ptr::write(rank_ptr.add(s as usize), i as u16);
+                }
+                rank.set_len(BLOCK);
+            }
         }
     }
     // SAFETY: The elements have been filled by reverse blocks
