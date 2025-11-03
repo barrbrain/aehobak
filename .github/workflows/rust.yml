@@ -101,7 +101,7 @@ jobs:
         with:
           tool: gungraun-runner
       - name: Install Valgrind
-        run: sudo apt-get install -y valgrind --no-install-recommends
+        run: sudo snap install valgrind --classic
       - uses: Swatinem/rust-cache@v2
       - run: git checkout HEAD^
       - name: Bench (baseline)
