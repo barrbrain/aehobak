@@ -76,39 +76,43 @@ fn sais(old: &[u8]) -> Result<Box<[u16]>> {
     use core::ptr::null_mut;
     use libsais_sys::libsais::libsais;
     ensure!(old.len() <= i32::MAX as usize, "input too large");
-    let mut sa: Vec<u16> = Vec::with_capacity(old.len() * 2);
-    for start in (0..old.len()).step_by(BLOCK) {
+    let mut sa: Vec<u16> = Vec::with_capacity(old.len());
+    let mut tmp: Vec<i32> = Vec::with_capacity(old.len().min(BLOCK));
+    for start in (0..old.len()).step_by(BLOCK).rev() {
+        let old_suffix = &old[start..];
         let len = (old.len() - start).min(BLOCK);
+
+        tmp.clear();
         let ret = unsafe {
             libsais(
-                old.as_ptr().add(start),
-                sa.as_mut_ptr().add(start) as *mut _,
+                old_suffix.as_ptr(),
+                tmp.as_mut_ptr(),
                 len as i32,
                 0,
                 null_mut(),
             )
         };
-        unsafe { sa.set_len(start + len * 2) };
-        sais_block_filter(&mut sa[start..]);
-        unsafe { sa.set_len(start + len) };
-        if start + len < old.len() {
-            sa[start..].sort_by_key(|&k| &old[start + k as usize..]);
-        }
         ensure!(ret == 0, "libsais failed");
-    }
-    assert!(sa.len() == old.len());
-    Ok(sa.into_boxed_slice())
-}
+        unsafe { tmp.set_len(len) };
 
-fn sais_block_filter(sa: &mut [u16]) {
-    let p = sa.as_mut_ptr();
-    let q = p as *mut i32;
-    unsafe {
-        for i in 0..sa.len() / 2 {
-            let v = *q.add(i);
-            *p.add(i) = v as u16;
+        let sa_slice = unsafe {
+            let sa_ptr = sa.as_mut_ptr().add(start);
+            for (i, &t) in tmp.iter().enumerate() {
+                std::ptr::write(sa_ptr.add(i), t as u16);
+            }
+            std::slice::from_raw_parts_mut(sa_ptr, len)
+        };
+
+        if len < old_suffix.len() {
+            sa_slice.sort_by_key(|&k| {
+                // SAFETY: A suffix array element, k < len
+                unsafe { old_suffix.get_unchecked(k as usize..) }
+            });
         }
     }
+    // SAFETY: The elements have been filled by reverse blocks
+    unsafe { sa.set_len(old.len()) };
+    Ok(sa.into_boxed_slice())
 }
 
 #[inline(always)]
