@@ -16,6 +16,8 @@ include = ["src/*.rs", "tests/*.rs", "benches/*.rs", "examples/*.rs", "LICENSE",
 libsais-sys = { version = "0.2.0", default-features = false }
 streamvbyte64 = "0.2.0"
 anyhow = "1.0"
+tlsh2 = { version = "1.1.0", features = ["diff", "fast"] }
+itertools = "0.14.0"
 
 [dev-dependencies]
 bsdiff = "0.2.1"

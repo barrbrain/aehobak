@@ -26,6 +26,7 @@
 use crate::control::Aehobak;
 use crate::encode::EncoderState;
 use anyhow::{ensure, Context, Error, Result};
+use itertools::Itertools;
 use std::io;
 use std::io::Write;
 
@@ -148,10 +149,16 @@ fn mismatch(old: &[u8], new: &[u8]) -> usize {
     old.iter().zip(new).take_while(|(&a, &b)| a == b).count()
 }
 
+use tlsh2::TlshDefault;
+use tlsh2::TlshDefaultBuilder;
+
 struct ScanState<'a> {
     sa: &'a [u16],
     old: &'a [u8],
     new: &'a [u8],
+    old_tlsh: Vec<Option<TlshDefault>>,
+    new_tlsh: Option<TlshDefault>,
+    tlsh_end: usize,
     scan: usize,
     len: usize,
     pos: usize,
@@ -163,10 +170,17 @@ struct ScanState<'a> {
 impl<'a> ScanState<'a> {
     #[inline(always)]
     fn new(old: &'a [u8], new: &'a [u8], sa: &'a [u16]) -> Self {
+        let mut old_tlsh = Vec::new();
+        for chunk in old.chunks(1 << 16) {
+            old_tlsh.push(TlshDefaultBuilder::build_from(chunk));
+        }
         Self {
             sa,
             old,
             new,
+            old_tlsh,
+            new_tlsh: None,
+            tlsh_end: 0,
             scan: 0,
             len: 0,
             pos: 0,
@@ -183,10 +197,22 @@ impl<'a> ScanState<'a> {
 
     fn find_best_match(&self) -> Result<(usize, usize)> {
         let mut ret = (self.sa.len(), 0);
-        for (i, sa) in self.sa.chunks(BLOCK).enumerate() {
-            let v = self.find_best_match_inner(i * BLOCK, sa)?;
-            if v.1 >= ret.1 {
-                ret = v;
+        let super_chunks = (1 << 16) / BLOCK;
+
+        for (chunks, old_tlsh) in self.sa.chunks(BLOCK).enumerate().chunks(super_chunks).into_iter().zip(&self.old_tlsh) {
+            if let Some(ref new_tlsh) = self.new_tlsh {
+                if let Some(old_tlsh) = old_tlsh {
+                    let diff = new_tlsh.diff(&old_tlsh, false);
+                    if  diff > 40 {
+                        continue;
+                    }
+                }
+            }
+            for (i, sa) in chunks {
+                let v = self.find_best_match_inner(i * BLOCK, sa)?;
+                if v.1 > ret.1 {
+                    ret = v;
+                }
             }
         }
         Ok(ret)
@@ -222,6 +248,22 @@ impl<'a> ScanState<'a> {
         let mut subscan = self.scan;
 
         while self.scan < self.new.len() {
+            if self.scan >= self.tlsh_end {
+                let tlsh_end;
+                self.new_tlsh = TlshDefaultBuilder::build_from(
+                    if self.scan + (1 << 16) <= self.new.len() {
+                        tlsh_end = self.scan + (1 << 16);
+                        &self.new[self.scan..][..1 << 16]
+                    } else if (1 << 16) <= self.new.len() {
+                        tlsh_end = self.new.len();
+                        &self.new[self.new.len() - (1 << 16)..]
+                    } else {
+                        tlsh_end = self.new.len();
+                        &self.new[..]
+                    }
+                );
+                self.tlsh_end = tlsh_end;
+            }
             (self.pos, self.len) = self.find_best_match()?;
             let scan_limit = self.scan.checked_add(self.len).context("")?;
 
