@@ -70,75 +70,15 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> Result<()> {
     Ok(())
 }
 
-const BLOCK: usize = 1 << 13;
-
-fn sais(old: &[u8]) -> Result<Box<[u16]>> {
+fn sais(old: &[u8]) -> Result<Box<[u32]>> {
     use core::ptr::null_mut;
     use libsais_sys::libsais::libsais;
     ensure!(old.len() <= i32::MAX as usize, "input too large");
-    let mut sa: Vec<u16> = Vec::with_capacity(old.len());
-    let mut tmp: Vec<i32> = Vec::with_capacity(old.len().min(BLOCK));
-    let mut rank: Vec<u16> = Vec::with_capacity(BLOCK);
-    for start in (0..old.len()).step_by(BLOCK).rev() {
-        let old_suffix = &old[start..];
-        let len = (old.len() - start).min(BLOCK);
-
-        tmp.clear();
-        let ret = unsafe {
-            libsais(
-                old_suffix.as_ptr(),
-                tmp.as_mut_ptr(),
-                len as i32,
-                0,
-                null_mut(),
-            )
-        };
-        ensure!(ret == 0, "libsais failed");
-        unsafe { tmp.set_len(len) };
-
-        let sa_slice = unsafe {
-            let sa_ptr = sa.as_mut_ptr().add(start);
-            for (i, &t) in tmp.iter().enumerate() {
-                std::ptr::write(sa_ptr.add(i), t as u16);
-            }
-            std::slice::from_raw_parts_mut(sa_ptr, len)
-        };
-
-        if rank.len() == BLOCK {
-            debug_assert!(start + len + BLOCK <= old.len());
-            sa_slice.sort_by(|&a, &b| {
-                let (a, b) = (a as usize, b as usize);
-                let min = a.min(b);
-                let len = BLOCK - min;
-                // SAFETY: Suffix array elements; a, b < BLOCK
-                unsafe {
-                    (
-                        old_suffix.get_unchecked(a..a + len),
-                        rank.get_unchecked(a - min),
-                    )
-                        .cmp(&(
-                            old_suffix.get_unchecked(b..b + len),
-                            rank.get_unchecked(b - min),
-                        ))
-                }
-            });
-        } else if len < old_suffix.len() {
-            sa_slice.sort_by_key(|&k| {
-                // SAFETY: A suffix array element, k < len
-                unsafe { old_suffix.get_unchecked(k as usize..) }
-            });
-        }
-        if len == BLOCK && start != 0 {
-            unsafe {
-                let rank_ptr = rank.as_mut_ptr();
-                for (i, &s) in sa_slice.iter().enumerate() {
-                    std::ptr::write(rank_ptr.add(s as usize), i as u16);
-                }
-                rank.set_len(BLOCK);
-            }
-        }
-    }
-    // SAFETY: The elements have been filled by reverse blocks
+    let mut sa = Vec::<u32>::with_capacity(old.len());
+    let len = old.len() as i32;
+    let sa_0 = sa[..].as_mut_ptr() as *mut i32;
+    let ret = unsafe { libsais(old.as_ptr(), sa_0, len, 0, null_mut()) };
+    ensure!(ret == 0, "libsais failed");
     unsafe { sa.set_len(old.len()) };
     Ok(sa.into_boxed_slice())
 }
@@ -149,7 +89,7 @@ fn mismatch(old: &[u8], new: &[u8]) -> usize {
 }
 
 struct ScanState<'a> {
-    sa: &'a [u16],
+    sa: &'a [u32],
     old: &'a [u8],
     new: &'a [u8],
     scan: usize,
@@ -162,7 +102,7 @@ struct ScanState<'a> {
 
 impl<'a> ScanState<'a> {
     #[inline(always)]
-    fn new(old: &'a [u8], new: &'a [u8], sa: &'a [u16]) -> Self {
+    fn new(old: &'a [u8], new: &'a [u8], sa: &'a [u32]) -> Self {
         Self {
             sa,
             old,
@@ -182,22 +122,12 @@ impl<'a> ScanState<'a> {
     }
 
     fn find_best_match(&self) -> Result<(usize, usize)> {
-        let mut ret = (self.sa.len(), 0);
-        for (i, sa) in self.sa.chunks(BLOCK).enumerate() {
-            let v = self.find_best_match_inner(i * BLOCK, sa)?;
-            if v.1 >= ret.1 {
-                ret = v;
-            }
-        }
-        Ok(ret)
-    }
-
-    fn find_best_match_inner(&self, start: usize, mut sa: &[u16]) -> Result<(usize, usize)> {
+        let mut sa = self.sa;
         let new = self.new.get(self.scan..).context("")?;
 
         while sa.len() > 2 {
             let pos = (sa.len() - 1) / 2;
-            let old_start = sa.get(pos).map(|&p| usize::from(p)).context("")? + start;
+            let old_start = sa.get(pos).map(|&p| p as usize).context("")?;
             let old_slice = self.old.get(old_start..).context("")?;
 
             let len = old_slice.len().min(new.len());
@@ -208,8 +138,12 @@ impl<'a> ScanState<'a> {
             };
         }
 
-        let a_start = sa.first().map(|&p| usize::from(p)).context("")? + start;
-        let b_start = sa.last().map(|&p| usize::from(p)).context("")? + start;
+        if sa.is_empty() {
+            return Ok((self.sa.len(), 0));
+        }
+
+        let a_start = sa.first().map(|&p| p as usize).context("")?;
+        let b_start = sa.last().map(|&p| p as usize).context("")?;
         let a = mismatch(self.old.get(a_start..).context("")?, new);
         let b = mismatch(self.old.get(b_start..).context("")?, new);
 
