@@ -34,23 +34,10 @@ pub fn encode<T: Write>(patch: &[u8], writer: &mut T) -> io::Result<()> {
     encode_internal(patch, writer)
 }
 
-fn encode_internal(mut patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
-    let mut encoder = EncoderState::new(patch.len());
-
-    while 24 <= patch.len() {
-        let control: AehobakControl = BsdiffControl::try_from(&patch[..24])
-            .unwrap()
-            .try_into()
-            .unwrap();
-        let (add, copy) = (control.add as usize, control.copy as usize);
-        encoder.control(control);
-        patch = &patch[24..];
-        encoder.add_diffed(&patch[..add]);
-        patch = &patch[add..];
-        encoder.copy(&patch[..copy]);
-        patch = &patch[copy..];
-    }
-    encoder.finalize(writer)
+fn encode_internal(patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
+    let mut encoder = EncoderState::parse(patch);
+    let encoder = encoder.freeze();
+    encoder.write(writer, 0)
 }
 
 pub struct EncoderState {
@@ -62,6 +49,7 @@ pub struct EncoderState {
     delta_diffs: Vec<u8>,
     add_cursor: usize,
     delta_cursor: usize,
+    controls: usize,
 }
 
 impl EncoderState {
@@ -76,11 +64,31 @@ impl EncoderState {
             delta_diffs: Vec::with_capacity(ops),
             add_cursor: 0,
             delta_cursor: 0,
+            controls: 0,
         }
+    }
+
+    pub fn parse(mut patch: &[u8]) -> Self {
+        let mut encoder = EncoderState::new(patch.len());
+        while 24 <= patch.len() {
+            let control: AehobakControl = BsdiffControl::try_from(&patch[..24])
+                .unwrap()
+                .try_into()
+                .unwrap();
+            let (add, copy) = (control.add as usize, control.copy as usize);
+            encoder.control(control);
+            patch = &patch[24..];
+            encoder.add_diffed(&patch[..add]);
+            patch = &patch[add..];
+            encoder.copy(&patch[..copy]);
+            patch = &patch[copy..];
+        }
+        encoder
     }
 
     pub fn control(&mut self, control: AehobakControl) {
         control.encode((&mut self.adds, &mut self.copies, &mut self.seeks));
+        self.controls += 1;
     }
 
     pub fn add(&mut self, old: &[u8], new: &[u8]) {
@@ -118,10 +126,8 @@ impl EncoderState {
         self.literals.extend(new);
     }
 
-    pub fn finalize(&mut self, writer: &mut dyn Write) -> io::Result<()> {
-        let coder = Coder0124::new();
-
-        let controls = self.adds.len();
+    pub fn freeze(&mut self) -> &Self {
+        let controls = self.controls;
         let padding = controls.wrapping_neg() % 4;
         self.seeks.resize(controls + padding, 0);
         self.adds.resize(controls + padding, 0);
@@ -129,6 +135,12 @@ impl EncoderState {
 
         let padding = self.delta_skips.len().wrapping_neg() % 4;
         self.delta_skips.resize(self.delta_skips.len() + padding, 0);
+
+        &*self
+    }
+
+    pub fn write(&self, writer: &mut dyn Write, perm: usize) -> io::Result<()> {
+        let coder = Coder0124::new();
 
         let mut u32_seq = Vec::with_capacity(
             self.adds.len() + self.copies.len() + self.delta_skips.len() + self.seeks.len(),
@@ -150,7 +162,7 @@ impl EncoderState {
             coder.encode(
                 &[
                     self.literals.len() as u32,
-                    controls as u32,
+                    self.controls as u32,
                     self.delta_diffs.len() as u32,
                     data_len as u32,
                 ],

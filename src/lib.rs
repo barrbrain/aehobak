@@ -34,6 +34,7 @@ mod patch;
 pub use decode::decode;
 pub use diff::diff;
 pub use encode::encode;
+pub use encode::EncoderState;
 pub use patch::patch;
 
 #[cfg(test)]
