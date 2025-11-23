@@ -40,6 +40,28 @@ fn encode_internal(patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
     encoder.write(writer, 0)
 }
 
+fn to_perm4(idx: u32) -> u32 {
+    let mut buffer = [0u8; 4];
+    let mut lo = idx;
+    (buffer[4 - 4 as usize], lo) = {
+        let q = lo * 43 >> 8;
+        (q as u8, (lo - q * 6))
+    };
+    (lo, buffer[4 - 1 as usize]) = (lo, 0);
+    (lo, buffer[4 - 2 as usize]) = (lo >> 1, lo as u8 & 1);
+    buffer[4 - 3 as usize] = lo as u8;
+
+    let mut choices = 0x3210u32;
+    let mut result = 0u32;
+    for value in buffer {
+        let shift = 4 * value as u32;
+        let upper = choices >> shift;
+        choices ^= (upper ^ (upper >> 4)) << shift;
+        result = result << 2 | (upper & 15);
+    }
+    result
+}
+
 pub struct EncoderState {
     literals: Vec<u8>,
     seeks: Vec<u32>,
@@ -139,16 +161,26 @@ impl EncoderState {
         &*self
     }
 
-    pub fn write(&self, writer: &mut dyn Write, perm: usize) -> io::Result<()> {
+    pub fn write(&self, writer: &mut dyn Write, rank: usize) -> io::Result<()> {
         let coder = Coder0124::new();
+
+        let (perm_out, perm_in) = {
+            let (rank_out, rank_in) = (rank / 24, rank % 24);
+            (to_perm4(rank_out as u32), to_perm4(rank_in as u32))
+        };
 
         let mut u32_seq = Vec::with_capacity(
             self.adds.len() + self.copies.len() + self.delta_skips.len() + self.seeks.len(),
         );
-        u32_seq.extend(&self.adds);
-        u32_seq.extend(&self.copies);
-        u32_seq.extend(&self.delta_skips);
-        u32_seq.extend(&self.seeks);
+        for shift in (0..8).step_by(2).rev() {
+            match (perm_in >> shift) & 3 {
+                0 => u32_seq.extend(&self.adds),
+                1 => u32_seq.extend(&self.copies),
+                2 => u32_seq.extend(&self.delta_skips),
+                3 => u32_seq.extend(&self.seeks),
+                _ => unreachable!(),
+            }
+        }
 
         let (tag_len, data_len) = Coder0124::max_compressed_bytes(u32_seq.len());
         let mut encoded = vec![0u8; tag_len + data_len];
@@ -156,26 +188,33 @@ impl EncoderState {
         let data_len = coder.encode(&u32_seq, tags, data);
         let data = &data[..data_len];
 
+        let mut prefix_vec = Vec::new();
+        for shift in (0..8).step_by(2).rev() {
+            match (perm_out >> shift) & 3 {
+                0 => prefix_vec.push(self.literals.len() as u32),
+                1 => prefix_vec.push(self.controls as u32),
+                2 => prefix_vec.push(self.delta_diffs.len() as u32),
+                3 => prefix_vec.push(data_len as u32),
+                _ => unreachable!(),
+            }
+        }
         let mut prefix = [0u8; 17];
         let prefix_len = 1 + {
             let (tag, data) = prefix.as_mut_slice().split_at_mut(1);
-            coder.encode(
-                &[
-                    self.literals.len() as u32,
-                    self.controls as u32,
-                    self.delta_diffs.len() as u32,
-                    data_len as u32,
-                ],
-                tag,
-                data,
-            )
+            coder.encode(&prefix_vec, tag, data)
         };
 
         writer.write_all(&prefix[..prefix_len])?;
-        writer.write_all(&self.literals)?;
-        writer.write_all(tags)?;
-        writer.write_all(&self.delta_diffs)?;
-        writer.write_all(data)?;
+        for shift in (0..8).step_by(2).rev() {
+            match (perm_out >> shift) & 3 {
+                0 => writer.write_all(&self.literals)?,
+                1 => writer.write_all(tags)?,
+                2 => writer.write_all(&self.delta_diffs)?,
+                3 => writer.write_all(data)?,
+                _ => unreachable!(),
+            }
+        }
+
         Ok(())
     }
 }
