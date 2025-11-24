@@ -37,7 +37,7 @@ pub fn encode<T: Write>(patch: &[u8], writer: &mut T) -> io::Result<()> {
 fn encode_internal(patch: &[u8], writer: &mut dyn Write) -> io::Result<()> {
     let mut encoder = EncoderState::parse(patch);
     let encoder = encoder.freeze();
-    encoder.write(writer, 0)
+    encoder.write(writer, 297)
 }
 
 fn to_perm4(idx: u32) -> u32 {

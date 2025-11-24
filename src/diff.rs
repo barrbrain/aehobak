@@ -67,7 +67,7 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> Result<()> {
         scanner.commit(back)?;
     }
     let encoder = encoder.freeze();
-    encoder.write(writer, 0)?;
+    encoder.write(writer, 297)?;
     Ok(())
 }
 
