@@ -40,12 +40,17 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
     if patch.len() < prefix_len {
         return Err(io::Error::from(UnexpectedEof));
     }
-    let (literals_len, controls, deltas_len, data_len) = {
+    let (deltas_len, literals_len, controls, data_len) = {
         let mut v = [0u32; 4];
         coder.decode(prefix_tag, patch, &mut v);
         (v[0] as usize, v[1] as usize, v[2] as usize, v[3] as usize)
     };
     patch = &patch[prefix_len..];
+
+    let mut delta_diffs = patch
+        .get(..deltas_len)
+        .ok_or(io::Error::from(UnexpectedEof))?;
+    patch = &patch[deltas_len..];
 
     let mut literals = patch
         .get(..literals_len)
@@ -69,20 +74,15 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
         .get(..tags_len)
         .ok_or(io::Error::from(UnexpectedEof))?;
     patch = &patch[tags_len..];
-    let (add_tags, copy_tags, mut delta_tags, seek_tags);
-    (add_tags, tags) = tags.split_at(controls.div_ceil(4));
+    let (copy_tags, mut delta_tags, seek_tags, add_tags);
     (copy_tags, tags) = tags.split_at(controls.div_ceil(4));
-    (delta_tags, seek_tags) = tags.split_at(deltas_len.div_ceil(4));
+    (delta_tags, tags) = tags.split_at(deltas_len.div_ceil(4));
+    (seek_tags, add_tags) = tags.split_at(controls.div_ceil(4));
 
-    let mut delta_diffs = patch
-        .get(..deltas_len)
-        .ok_or(io::Error::from(UnexpectedEof))?;
-    patch = &patch[deltas_len..];
-
-    let add_data_len = coder.data_len(add_tags);
     let copy_data_len = coder.data_len(copy_tags);
     let delta_data_len = coder.data_len(delta_tags);
     let seek_data_len = coder.data_len(seek_tags);
+    let add_data_len = coder.data_len(add_tags);
     if patch.len() < data_len
         || add_data_len
             .checked_add(copy_data_len)
@@ -96,10 +96,10 @@ pub fn patch(old: &[u8], mut patch: &[u8], new: &mut Vec<u8>) -> io::Result<()> 
         return Err(io::Error::from(UnexpectedEof));
     }
     let mut data = &patch[..data_len];
-    let (mut add_data, mut copy_data, mut delta_data, mut seek_data);
-    (add_data, data) = data.split_at(add_data_len);
+    let (mut copy_data, mut delta_data, mut seek_data, mut add_data);
     (copy_data, data) = data.split_at(copy_data_len);
-    (delta_data, seek_data) = data.split_at(delta_data_len);
+    (delta_data, data) = data.split_at(delta_data_len);
+    (seek_data, add_data) = data.split_at(seek_data_len);
 
     let mut old_cursor: usize = 0;
     let mut copy_cursor: usize = 0;

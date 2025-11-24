@@ -33,9 +33,9 @@ use std::hint::black_box;
 
 fn patch_inputs() -> (Vec<u8>, Box<[u8]>, Vec<u8>, Vec<u8>) {
     let patch = data::ref_patch();
-    let old = vec![0u8; 524288];
-    let new = Vec::with_capacity(524288);
-    let bspatch = Vec::with_capacity(524288);
+    let old = vec![0u8; 262_144];
+    let new = Vec::with_capacity(262_144);
+    let bspatch = Vec::with_capacity(262_144);
     (old, patch, new, bspatch)
 }
 
@@ -71,13 +71,13 @@ library_benchmark_group!(
 
 fn diff_inputs() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
     let patch = data::ref_patch();
-    let mut new = Vec::with_capacity(524288);
+    let mut new = Vec::with_capacity(262_144);
     let mut rng = Xoshiro256Plus::seed_from_u64(0xeba2fa67e5a81121);
-    let mut old = vec![0u8; 524288];
+    let mut old = vec![0u8; 262_144];
     rng.fill_bytes(&mut old);
     aehobak::patch(&old, &mut &*patch, &mut new).unwrap();
-    let bspatch = Vec::with_capacity(524288);
-    let patch = Vec::with_capacity(524288);
+    let bspatch = Vec::with_capacity(262_144);
+    let patch = Vec::with_capacity(262_144);
     (old, new, bspatch, patch)
 }
 

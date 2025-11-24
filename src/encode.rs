@@ -133,10 +133,10 @@ impl EncoderState {
         let mut u32_seq = Vec::with_capacity(
             self.adds.len() + self.copies.len() + self.delta_skips.len() + self.seeks.len(),
         );
-        u32_seq.extend(&self.adds);
         u32_seq.extend(&self.copies);
         u32_seq.extend(&self.delta_skips);
         u32_seq.extend(&self.seeks);
+        u32_seq.extend(&self.adds);
 
         let (tag_len, data_len) = Coder0124::max_compressed_bytes(u32_seq.len());
         let mut encoded = vec![0u8; tag_len + data_len];
@@ -149,9 +149,9 @@ impl EncoderState {
             let (tag, data) = prefix.as_mut_slice().split_at_mut(1);
             coder.encode(
                 &[
+                    self.delta_diffs.len() as u32,
                     self.literals.len() as u32,
                     controls as u32,
-                    self.delta_diffs.len() as u32,
                     data_len as u32,
                 ],
                 tag,
@@ -160,9 +160,9 @@ impl EncoderState {
         };
 
         writer.write_all(&prefix[..prefix_len])?;
+        writer.write_all(&self.delta_diffs)?;
         writer.write_all(&self.literals)?;
         writer.write_all(tags)?;
-        writer.write_all(&self.delta_diffs)?;
         writer.write_all(data)?;
         Ok(())
     }
