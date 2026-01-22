@@ -42,6 +42,9 @@ pub fn diff<T: Write>(old: &[u8], new: &[u8], writer: &mut T) -> io::Result<()> 
 }
 
 fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> Result<()> {
+    #[cfg(miri)]
+    let sa = suf_sort_naive(old)?;
+    #[cfg(not(miri))]
     let sa = sais(old)?;
     let mut scanner = ScanState::new(old, new, &sa);
     let mut encoder = EncoderState::new(new.len());
@@ -70,6 +73,18 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> Result<()> {
     Ok(())
 }
 
+#[cfg(miri)]
+fn suf_sort_naive(old: &[u8]) -> Result<Box<[u32]>> {
+    ensure!(old.len() <= i32::MAX as usize, "input too large");
+    let mut sa: Vec<u32> = (0..old.len() as u32).collect();
+    sa.sort_unstable_by_key(|&v| {
+        // SAFETY: Values of `sa` are offsets into `old`
+        unsafe { old.get_unchecked(v as usize..) }
+    });
+    Ok(sa.into_boxed_slice())
+}
+
+#[cfg(not(miri))]
 fn sais(old: &[u8]) -> Result<Box<[u32]>> {
     use core::ptr::null_mut;
     use libsais_sys::libsais::libsais;
