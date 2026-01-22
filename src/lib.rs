@@ -118,6 +118,7 @@ mod tests {
             patch(&old, &encoded, &mut result).is_err() || new.len() < 2
         }
 
+        #[cfg_attr(miri, ignore)]
         fn direct_diff(old: Vec<u8>, idx: usize) -> bool {
             let mut new = old.clone();
             if !new.is_empty() {
@@ -133,6 +134,7 @@ mod tests {
             result == new
         }
 
+        #[cfg_attr(miri, ignore)]
         fn direct_diff_nospace(old: Vec<u8>, idx: usize) -> TestResult {
             let mut new = old.clone();
             if new.is_empty() {
@@ -144,6 +146,7 @@ mod tests {
             TestResult::from_bool(diff(&old, &new, &mut patch.as_mut_slice()).is_err())
         }
 
+        #[cfg_attr(miri, ignore)] // Slow
         fn arbitrary_patch(skeleton: LinkedList<(u8,u8,i8)>, period: u8, phase: u8) -> bool {
             use std::io::ErrorKind::{InvalidData, UnexpectedEof};
             let (bspatch, old_len, new_len) = gen_bspatch(skeleton, period, phase);
@@ -163,6 +166,7 @@ mod tests {
             }
         }
 
+        #[cfg_attr(miri, ignore)]
         fn arbitrary_diff(skeleton: LinkedList<(u8,u8,i8)>, period: u8, phase: u8) -> TestResult {
             if let Some((old, new)) = gen_old_new(skeleton, period, phase) {
                 let mut encoded = Vec::with_capacity(new.len());
@@ -181,6 +185,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn direct_diff_huge() {
         let mut old = Vec::with_capacity(i32::MAX as usize + 1);
         old.resize(old.capacity(), 0);
@@ -189,6 +194,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn arbitrary_diff_vectors() {
         #[rustfmt::skip]
         let skeleton: Vec<(u8, i8)> = vec![
