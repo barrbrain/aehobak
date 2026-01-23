@@ -86,15 +86,10 @@ fn suf_sort_naive(old: &[u8]) -> Result<Box<[u32]>> {
 
 #[cfg(not(miri))]
 fn sais(old: &[u8]) -> Result<Box<[u32]>> {
-    use core::ptr::null_mut;
-    use libsais_sys::libsais::libsais;
     ensure!(old.len() <= i32::MAX as usize, "input too large");
-    let mut sa = Vec::<u32>::with_capacity(old.len());
-    let len = old.len() as i32;
-    let sa_0 = sa[..].as_mut_ptr() as *mut i32;
-    let ret = unsafe { libsais(old.as_ptr(), sa_0, len, 0, null_mut()) };
-    ensure!(ret == 0, "libsais failed");
-    unsafe { sa.set_len(old.len()) };
+    let (_, sa) = cdivsufsort::sort(old).into_parts();
+    // SAFETY: i32 to u32 transmute is safe; non-negative values
+    let sa: Vec<u32> = unsafe { core::mem::transmute(sa) };
     Ok(sa.into_boxed_slice())
 }
 

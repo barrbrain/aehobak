@@ -13,7 +13,7 @@ edition = "2021"
 include = ["src/*.rs", "tests/*.rs", "benches/*.rs", "examples/*.rs", "LICENSE", "README.md", "Cargo.toml"]
 
 [dependencies]
-libsais-sys = { version = "0.2.0", default-features = false }
+cdivsufsort = "2.0.0"
 streamvbyte64 = "0.2.0"
 anyhow = "1.0"
 
