@@ -93,9 +93,23 @@ fn sais(old: &[u8]) -> Result<Box<[u32]>> {
     Ok(sa.into_boxed_slice())
 }
 
-#[inline(always)]
+#[inline(never)]
 fn mismatch(old: &[u8], new: &[u8]) -> usize {
-    old.iter().zip(new).take_while(|(&a, &b)| a == b).count()
+    let min_len = old.len().min(new.len()).min(i32::MAX as usize);
+    let mut i = 0;
+    while i + 32 <= min_len {
+        if old[i..i + 32] != new[i..i + 32] {
+            break;
+        }
+        i += 32;
+    }
+    while i < min_len {
+        if old[i] != new[i] {
+            break;
+        }
+        i += 1;
+    }
+    i
 }
 
 struct ScanState<'a> {
