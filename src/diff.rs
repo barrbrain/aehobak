@@ -50,11 +50,11 @@ fn diff_internal(old: &[u8], new: &[u8], writer: &mut dyn Write) -> Result<()> {
     let mut encoder = EncoderState::new(new.len());
 
     while !scanner.done() {
-        if !scanner.advance()? {
+        if !scanner.advance() {
             continue;
         }
-        let (add, back) = scanner.optimize_overlap(scanner.calc_add()?, scanner.calc_back()?)?;
-        let (copy, seek) = scanner.calc_copy_seek(add, back)?;
+        let (add, back) = scanner.optimize_overlap(scanner.calc_add(), scanner.calc_back());
+        let (copy, seek) = scanner.calc_copy_seek(add, back);
 
         let add_u32: u32 = add.try_into()?;
         let copy_u32: u32 = copy.try_into()?;
@@ -145,14 +145,17 @@ impl<'a> ScanState<'a> {
         self.scan >= self.new.len()
     }
 
-    fn find_best_match(&self) -> Result<(usize, usize)> {
+    fn find_best_match(&self) -> (usize, usize) {
         let mut sa = self.sa;
-        let new = self.new.get(self.scan..).context("")?;
+        // SAFETY: From !done(), scan <= new.len()
+        let new = unsafe { self.new.get_unchecked(self.scan..) };
 
         while sa.len() > 2 {
             let pos = (sa.len() - 1) / 2;
-            let old_start = sa.get(pos).map(|&p| p as usize).context("")?;
-            let old_slice = self.old.get(old_start..).context("")?;
+            // SAFETY: pos indexes sa
+            let old_start = unsafe { *sa.get_unchecked(pos) as usize };
+            // SAFETY: content of sa indexes old
+            let old_slice = unsafe { self.old.get_unchecked(old_start..) };
 
             let len = old_slice.len().min(new.len());
             sa = if old_slice.get(..len) < new.get(..len) {
@@ -163,55 +166,73 @@ impl<'a> ScanState<'a> {
         }
 
         if sa.is_empty() {
-            return Ok((self.sa.len(), 0));
+            return (self.sa.len(), 0);
         }
+        // SAFETY: sa is not empty
+        let (a_start, b_start) = unsafe {
+            (
+                *sa.first().unwrap_unchecked() as usize,
+                *sa.last().unwrap_unchecked() as usize,
+            )
+        };
+        // SAFETY: content of sa indexes old
+        let (a_slice, b_slice) = unsafe {
+            (
+                self.old.get_unchecked(a_start..),
+                self.old.get_unchecked(b_start..),
+            )
+        };
+        let a = mismatch(a_slice, new);
+        let b = mismatch(b_slice, new);
 
-        let a_start = sa.first().map(|&p| p as usize).context("")?;
-        let b_start = sa.last().map(|&p| p as usize).context("")?;
-        let a = mismatch(self.old.get(a_start..).context("")?, new);
-        let b = mismatch(self.old.get(b_start..).context("")?, new);
-
-        Ok(if a > b { (a_start, a) } else { (b_start, b) })
+        if a > b {
+            (a_start, a)
+        } else {
+            (b_start, b)
+        }
     }
 
-    fn advance(&mut self) -> Result<bool> {
-        self.scan = self.scan.checked_add(self.len).context("")?;
+    #[inline(never)]
+    fn advance(&mut self) -> bool {
+        debug_assert!(self.scan <= self.new.len());
+        debug_assert!(self.len <= self.new.len().saturating_sub(self.scan));
+        self.scan += self.len;
         let mut score = 0;
         let mut subscan = self.scan;
 
         while self.scan < self.new.len() {
-            (self.pos, self.len) = self.find_best_match()?;
-            let scan_limit = self.scan.checked_add(self.len).context("")?;
+            (self.pos, self.len) = self.find_best_match();
+            debug_assert!(self.len <= self.new.len().saturating_sub(self.scan));
+            let scan_limit = self.scan + self.len;
 
             while subscan < scan_limit {
-                let idx = subscan.checked_add_signed(self.last_offset).context("")?;
-                if let Some(old_byte) = self.old.get(idx) {
-                    if old_byte == &self.new[subscan] {
-                        score += 1;
-                    }
+                let idx = subscan.wrapping_add_signed(self.last_offset);
+                if idx < self.old.len() && self.old[idx] == self.new[subscan] {
+                    score += 1;
                 }
-                subscan = subscan.checked_add(1).context("")?;
+                subscan += 1;
             }
 
             if (self.len == score && self.len != 0) || self.len > score + 8 {
                 break;
             }
 
-            let idx = self.scan.checked_add_signed(self.last_offset).context("")?;
+            let idx = self.scan.wrapping_add_signed(self.last_offset);
             if idx < self.old.len() && self.old[idx] == self.new[self.scan] {
                 score -= 1;
             }
-            self.scan = self.scan.checked_add(1).context("")?;
+            self.scan += 1;
         }
-        Ok(self.len != score || self.scan == self.new.len())
+        self.len != score || self.scan == self.new.len()
     }
 
-    fn calc_add(&self) -> Result<usize> {
+    fn calc_add(&self) -> usize {
         let mut add = 0;
         let mut score = 0;
         let mut best = 0;
         let mut i = 0;
 
+        debug_assert!(self.last_scan <= self.scan);
         while self.last_scan + i < self.scan && self.last_pos + i < self.old.len() {
             if self
                 .old
@@ -221,18 +242,18 @@ impl<'a> ScanState<'a> {
             {
                 score += 1;
             }
-            i = i.checked_add(1).context("")?;
+            i += 1;
             if score * 2 - i as i32 > best * 2 - add as i32 {
                 best = score;
                 add = i;
             }
         }
-        Ok(add)
+        add
     }
 
-    fn calc_back(&self) -> Result<usize> {
+    fn calc_back(&self) -> usize {
         if self.scan >= self.new.len() {
-            return Ok(0);
+            return 0;
         }
 
         let mut back = 0;
@@ -243,8 +264,8 @@ impl<'a> ScanState<'a> {
         while self.scan >= self.last_scan + i && self.pos >= i {
             if self
                 .old
-                .get(self.pos.checked_sub(i).context("")?)
-                .zip(self.new.get(self.scan.checked_sub(i).context("")?))
+                .get(self.pos - i)
+                .zip(self.new.get(self.scan - i))
                 .is_some_and(|(o, n)| o == n)
             {
                 score += 1;
@@ -254,13 +275,14 @@ impl<'a> ScanState<'a> {
                 best = score;
                 back = i;
             }
-            i = i.checked_add(1).context("")?;
+            i += 1;
         }
-        Ok(back)
+        back
     }
 
-    fn optimize_overlap(&self, mut add: usize, mut back: usize) -> Result<(usize, usize)> {
-        if self.last_scan.checked_add(add).context("")? > self.scan.checked_sub(back).context("")? {
+    fn optimize_overlap(&self, mut add: usize, mut back: usize) -> (usize, usize) {
+        debug_assert!(self.scan >= back);
+        if self.last_scan + add > self.scan - back {
             let overlap = self.last_scan + add - (self.scan - back);
 
             let mut score = 0;
@@ -289,21 +311,13 @@ impl<'a> ScanState<'a> {
             back -= forward;
         }
 
-        Ok((add, back))
+        (add, back)
     }
 
-    fn calc_copy_seek(&self, add: usize, back: usize) -> Result<(usize, isize)> {
-        let copy = self
-            .scan
-            .checked_sub(back)
-            .and_then(|v| v.checked_sub(self.last_scan + add))
-            .context("")?;
-        let seek = (self.pos as isize)
-            .checked_sub(self.last_pos as isize)
-            .and_then(|v| v.checked_sub((back + add) as isize))
-            .context("")?;
-
-        Ok((copy, seek))
+    fn calc_copy_seek(&self, add: usize, back: usize) -> (usize, isize) {
+        let copy = self.scan - back - (self.last_scan + add);
+        let seek = (self.pos as isize) - (self.last_pos as isize) - ((back + add) as isize);
+        (copy, seek)
     }
 
     #[inline(always)]
