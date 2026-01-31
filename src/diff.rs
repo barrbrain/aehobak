@@ -175,33 +175,41 @@ impl<'a> ScanState<'a> {
     }
 
     fn advance(&mut self) -> Result<bool> {
-        self.scan = self.scan.checked_add(self.len).context("")?;
+        debug_assert!(self.scan <= self.new.len());
+        debug_assert!(self.len <= self.new.len().saturating_sub(self.scan));
+        self.scan += self.len;
         let mut score = 0;
         let mut subscan = self.scan;
 
         while self.scan < self.new.len() {
             (self.pos, self.len) = self.find_best_match()?;
-            let scan_limit = self.scan.checked_add(self.len).context("")?;
+            debug_assert!(self.len <= self.new.len().saturating_sub(self.scan));
+            let scan_limit = self.scan + self.len;
 
             while subscan < scan_limit {
-                let idx = subscan.checked_add_signed(self.last_offset).context("")?;
-                if let Some(old_byte) = self.old.get(idx) {
-                    if old_byte == &self.new[subscan] {
+                let idx_opt = if self.last_offset >= 0 {
+                    subscan.checked_add(self.last_offset as usize)
+                } else {
+                    let neg = (-self.last_offset) as usize;
+                    subscan.checked_sub(neg)
+                };
+                if let Some(idx) = idx_opt.and_then(|i| self.old.get(i).map(|_| i)) {
+                    if self.old[idx] == self.new[subscan] {
                         score += 1;
                     }
                 }
-                subscan = subscan.checked_add(1).context("")?;
+                subscan += 1;
             }
 
             if (self.len == score && self.len != 0) || self.len > score + 8 {
                 break;
             }
 
-            let idx = self.scan.checked_add_signed(self.last_offset).context("")?;
+            let idx = self.scan.wrapping_add_signed(self.last_offset);
             if idx < self.old.len() && self.old[idx] == self.new[self.scan] {
                 score -= 1;
             }
-            self.scan = self.scan.checked_add(1).context("")?;
+            self.scan += 1;
         }
         Ok(self.len != score || self.scan == self.new.len())
     }
@@ -212,6 +220,7 @@ impl<'a> ScanState<'a> {
         let mut best = 0;
         let mut i = 0;
 
+        debug_assert!(self.last_scan <= self.scan);
         while self.last_scan + i < self.scan && self.last_pos + i < self.old.len() {
             if self
                 .old
@@ -221,7 +230,7 @@ impl<'a> ScanState<'a> {
             {
                 score += 1;
             }
-            i = i.checked_add(1).context("")?;
+            i += 1;
             if score * 2 - i as i32 > best * 2 - add as i32 {
                 best = score;
                 add = i;
@@ -243,8 +252,8 @@ impl<'a> ScanState<'a> {
         while self.scan >= self.last_scan + i && self.pos >= i {
             if self
                 .old
-                .get(self.pos.checked_sub(i).context("")?)
-                .zip(self.new.get(self.scan.checked_sub(i).context("")?))
+                .get(self.pos - i)
+                .zip(self.new.get(self.scan - i))
                 .is_some_and(|(o, n)| o == n)
             {
                 score += 1;
@@ -254,13 +263,14 @@ impl<'a> ScanState<'a> {
                 best = score;
                 back = i;
             }
-            i = i.checked_add(1).context("")?;
+            i += 1;
         }
         Ok(back)
     }
 
     fn optimize_overlap(&self, mut add: usize, mut back: usize) -> Result<(usize, usize)> {
-        if self.last_scan.checked_add(add).context("")? > self.scan.checked_sub(back).context("")? {
+        debug_assert!(self.scan >= back);
+        if self.last_scan + add > self.scan - back {
             let overlap = self.last_scan + add - (self.scan - back);
 
             let mut score = 0;
