@@ -18,7 +18,7 @@ The following results are for LZ4-compressed bsdiff patches of build artifacts t
 - 99.2% over **uncompressed bsdiff** patches
 
 Direct application of aehobak patches can achieve **45% of memcpy speed** and is panic-free.
-Direct generation of aehobak patches takes **69% less time than bsdiff**.
+Direct generation of aehobak patches takes **76% less time than bsdiff**.
 
 ## Usage
 
